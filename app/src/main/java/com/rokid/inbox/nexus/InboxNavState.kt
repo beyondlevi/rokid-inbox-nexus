@@ -232,25 +232,22 @@ class InboxNavState {
         val rows = ArrayList<String>()
         rows += row(0 == inboxIndex, "Filtro: ${if (filter == Filter.ALL) "Todos" else "Nao lidos"}")
         rows += row(1 == inboxIndex, "Atualizar")
-        if (chats.isEmpty()) {
-            rows += "  (sem conversas)"
-        } else {
-            chats.forEachIndexed { i, c ->
-                rows += row(inboxIndex == i + INBOX_HEADER_ROWS, chatLabel(c))
-            }
+        chats.forEachIndexed { i, c ->
+            rows += row(inboxIndex == i + INBOX_HEADER_ROWS, chatLabel(c))
         }
-        statusLine?.let { rows += "  $it" }
+        val body = windowed(rows, inboxIndex).toMutableList()
+        if (chats.isEmpty() && statusLine == null) body += "  (sem conversas)"
+        statusLine?.let { body += "  $it" }
         return Screen(
-            title = "Inbox",
-            lines = rows,
-            footer = "girar - mover · toque - abrir · duplo - sair",
+            title = "Inbox · ${if (filter == Filter.ALL) "Todos" else "Nao lidos"}",
+            lines = body,
+            footer = "girar mover · toque abrir · duplo sair",
             keySeed = "inbox|${filter}|${inboxIndex}|${chats.size}|${statusLine ?: ""}",
         )
     }
 
     private fun chatScreen(): Screen {
         val rows = ArrayList<String>()
-        if (messages.isEmpty()) rows += "  (sem mensagens)"
         messages.forEachIndexed { i, m ->
             rows += row(chatIndex == i, messageLabel(m))
         }
@@ -258,18 +255,20 @@ class InboxNavState {
         actions.forEachIndexed { i, a ->
             rows += row(chatIndex == messages.size + i, a)
         }
-        statusLine?.let { rows += "  $it" }
+        val body = windowed(rows, chatIndex).toMutableList()
+        if (rows.isEmpty() && statusLine == null) body += "  (sem mensagens)"
+        statusLine?.let { body += "  $it" }
         return Screen(
             title = openChat?.let { "${it.boxLabel} ${it.name}".trim() }?.take(60) ?: "Conversa",
-            lines = rows,
-            footer = "girar - mover · toque - abrir · duplo - voltar",
+            lines = body,
+            footer = "girar mover · toque abrir · duplo voltar",
             keySeed = "chat|${openChat?.boxId}:${openChat?.id}|${chatIndex}|${messages.size}|${statusLine ?: ""}",
         )
     }
 
     private fun actionsScreen(): Screen {
         val m = selectedMessage
-        val header = m?.let { messageFull(it) } ?: ""
+        val header = m?.let { messageFull(it).take(100) } ?: ""
         val rows = ArrayList<String>()
         val actions = messageActionRows()
         if (actions.isEmpty()) {
@@ -282,36 +281,35 @@ class InboxNavState {
         return Screen(
             title = "Mensagem",
             lines = lines,
-            footer = "girar - mover · toque - acao · duplo - voltar",
+            footer = "girar mover · toque acao · duplo voltar",
             keySeed = "acts|${m?.id}|${actionsIndex}|${statusLine ?: ""}",
         )
     }
 
     private fun quickScreen(): Screen {
         val rows = ArrayList<String>()
-        if (quickMessages.isEmpty()) {
-            rows += "  (configure respostas rapidas no celular)"
-        } else {
-            quickMessages.forEachIndexed { i, q ->
-                rows += row(quickIndex == i, "${q.title} — ${q.body}".take(80))
-            }
+        quickMessages.forEachIndexed { i, q ->
+            rows += row(quickIndex == i, "${q.title} — ${q.body}".take(80))
         }
-        statusLine?.let { rows += "  $it" }
+        val body = windowed(rows, quickIndex).toMutableList()
+        if (quickMessages.isEmpty()) body += "  (configure respostas rapidas no celular)"
+        statusLine?.let { body += "  $it" }
         return Screen(
             title = if (quoting != null) "Responder citando" else "Responder",
-            lines = rows,
-            footer = "girar - mover · toque - enviar · duplo - voltar",
+            lines = body,
+            footer = "girar mover · toque enviar · duplo voltar",
             keySeed = "quick|${quoting?.id ?: ""}|${quickIndex}|${statusLine ?: ""}",
         )
     }
 
     private fun reactScreen(): Screen {
         val rows = reactions.mapIndexed { i, r -> row(reactIndex == i, "${r.first} ${r.second}") }
-        val extra = statusLine?.let { listOf("  $it") } ?: emptyList()
+        val body = windowed(rows, reactIndex).toMutableList()
+        statusLine?.let { body += "  $it" }
         return Screen(
             title = "Reagir",
-            lines = rows + extra,
-            footer = "girar - mover · toque - reagir · duplo - voltar",
+            lines = body,
+            footer = "girar mover · toque reagir · duplo voltar",
             keySeed = "react|${selectedMessage?.id}|${reactIndex}|${statusLine ?: ""}",
         )
     }
@@ -423,6 +421,25 @@ class InboxNavState {
         else -> "[midia]"
     }
 
+    /**
+     * The HUD card shows only a few rows and never auto-scrolls to a marked
+     * row (there is no selection concept in the card model). So we paginate the
+     * selectable rows into pages of [VISIBLE_ROWS] that always contain the
+     * focused row, with "more above / more below" indicators — the same
+     * approach the shipped Transit plugin uses for its boards.
+     */
+    private fun windowed(rows: List<String>, selected: Int): List<String> {
+        if (rows.size <= VISIBLE_ROWS) return rows
+        val page = selected.coerceAtLeast(0) / VISIBLE_ROWS
+        val start = page * VISIBLE_ROWS
+        val end = minOf(start + VISIBLE_ROWS, rows.size)
+        val out = ArrayList<String>()
+        if (start > 0) out += "  (+$start acima)"
+        out += rows.subList(start, end)
+        if (end < rows.size) out += "  (+${rows.size - end} abaixo)"
+        return out
+    }
+
     /** Split long info lines into HUD rows within the per-line 240-char limit. */
     private fun wrap(lines: List<String>, max: Int = 200): List<String> {
         val out = ArrayList<String>()
@@ -444,6 +461,7 @@ class InboxNavState {
 
     companion object {
         const val INBOX_HEADER_ROWS = 2 // filter toggle + refresh
+        const val VISIBLE_ROWS = 6 // rows that fit the HUD card at glance distance
 
         private const val ROW_REPLY = "Responder"
         private const val ROW_LOAD_OLDER = "Carregar mais"

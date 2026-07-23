@@ -123,4 +123,26 @@ class InboxNavStateTest {
         assertEquals("m9", (act as InboxNavState.NavAction.SendReaction).message.id)
         assertEquals(s.reactions.first().first, act.emoji)
     }
+
+    @Test
+    fun `inbox windows so the focused row is always rendered`() {
+        val chats = (1..20).map { chat("c$it") }
+        val s = InboxNavState().apply { setInbox(chats) }
+        repeat(15) { s.move(1) } // walk deep past the first visible page
+        val lines = s.screen().lines
+        assertEquals(1, lines.count { it.startsWith("> ") }) // focus is rendered, exactly once
+        assertTrue(lines.any { it.contains("acima") }) // "more above" indicator shown
+        assertTrue(lines.size <= InboxNavState.VISIBLE_ROWS + 2) // window + up/down markers
+    }
+
+    @Test
+    fun `opening a long conversation renders the newest focused message`() {
+        val s = stateWithInbox(chat("a"))
+        val msgs = (1..30).map { Message(id = "m$it", text = "msg $it", senderName = "X") }
+        s.setConversation(chat("a"), msgs, atStart = true, canSend = false, canReact = false)
+        val lines = s.screen().lines
+        // The focused (newest) message must be inside the rendered window (finding #2).
+        assertEquals(1, lines.count { it.startsWith("> ") })
+        assertTrue(lines.any { it.startsWith("> ") && it.contains("msg 30") })
+    }
 }

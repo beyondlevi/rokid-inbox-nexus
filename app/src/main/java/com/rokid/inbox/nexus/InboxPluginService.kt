@@ -55,6 +55,7 @@ class InboxPluginService : NexusPluginService(), InboxRuntime.SurfaceHost {
             lines = screen.lines.map { it.take(240) }.take(64),
             footer = screen.footer.take(240),
             contentKey = contentKey(screen.keySeed),
+            handlesBack = true,
         )
         val result = if (cardShown) s.updateCard(card) else s.showCard(card)
         // SURFACE_BUSY: another plugin owns the HUD — give up quietly, no retry loop.

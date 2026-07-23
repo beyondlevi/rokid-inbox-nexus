@@ -2,6 +2,23 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.0.1] - 2026-07-23
+
+### Fixed
+- HUD lists could not be scrolled past the visible area: the whole list was sent
+  as card lines, and the card surface has no selection concept and never scrolls
+  to the marked row, so once the focused row moved off-screen the `>` cursor
+  disappeared and the remaining items were unreachable. The inbox, conversation,
+  quick-reply and reaction lists now paginate into pages of six rows that always
+  contain the focused row, with "(+N acima)" / "(+N abaixo)" indicators — the
+  approach the shipped Transit plugin uses.
+- Opening a conversation left the cursor invisible: focus starts on the newest
+  message (bottom of the list), which was outside the rendered window. Paging now
+  renders the page containing the focused message, so the cursor is visible
+  immediately.
+- Cards now set `handlesBack`, so BACK inside a sub-view (message actions, reply,
+  react) pops to the parent instead of letting the hub close the surface.
+
 ## [1.0.0] - 2026-07-23
 
 ### Added
