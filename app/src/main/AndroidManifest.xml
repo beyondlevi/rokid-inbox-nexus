@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- The plugin fetches each channel's own API directly from the phone. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Deliberately no POST_NOTIFICATIONS: plugin foreground services stay
+         invisible; the Rokid Nexus hub owns the single user-facing notification. -->
+
+    <queries>
+        <intent>
+            <action android:name="com.anezium.rokidbus.action.HUB" />
+        </intent>
+    </queries>
+
+    <application
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.RokidInbox">
+
+        <!-- Settings screen: exported, NO intent-filter; the hub opens it by component. -->
+        <activity
+            android:name=".InboxSettingsActivity"
+            android:exported="true"
+            android:windowSoftInputMode="adjustResize" />
+
+        <service
+            android:name=".InboxPluginService"
+            android:exported="true"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="glasses-session" />
+            <intent-filter>
+                <action android:name="com.anezium.rokidbus.action.PLUGIN" />
+            </intent-filter>
+            <meta-data android:name="com.anezium.rokidbus.plugin.ID" android:value="rokid-inbox" />
+            <meta-data android:name="com.anezium.rokidbus.plugin.DISPLAY_NAME" android:value="Inbox" />
+            <meta-data android:name="com.anezium.rokidbus.plugin.ICON_DRAWABLE" android:resource="@drawable/nexus_glyph_inbox" />
+            <meta-data android:name="com.anezium.rokidbus.plugin.API_VERSION" android:value="3" />
+            <meta-data android:name="com.anezium.rokidbus.plugin.CAPABILITIES" android:value="surfaces" />
+            <meta-data android:name="com.anezium.rokidbus.plugin.RECEIVE_PREFIXES" android:value="/plugin/rokid-inbox,/system/plugin" />
+            <meta-data android:name="com.anezium.rokidbus.plugin.SETTINGS_ACTIVITY" android:value=".InboxSettingsActivity" />
+            <meta-data android:name="com.anezium.rokidbus.plugin.LAUNCHABLE" android:value="true" />
+        </service>
+    </application>
+</manifest>
