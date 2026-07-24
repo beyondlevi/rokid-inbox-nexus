@@ -5,6 +5,7 @@ import com.rokid.inbox.nexus.model.Message
 import com.rokid.inbox.nexus.model.QuickMessage
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -144,5 +145,52 @@ class InboxNavStateTest {
         // The focused (newest) message must be inside the rendered window (finding #2).
         assertEquals(1, lines.count { it.startsWith("> ") })
         assertTrue(lines.any { it.startsWith("> ") && it.contains("msg 30") })
+    }
+
+    @Test
+    fun `voice dictation row appears only when STT is enabled on a sendable chat`() {
+        val s = stateWithInbox(chat("a"))
+        s.setSttEnabled(true)
+        s.setConversation(chat("a"), listOf(Message(id = "m1", text = "hi")), atStart = true, canSend = true, canReact = false)
+        // Rows: [m1, "Responder", "Ditar por voz"]. Walk to the dictation row.
+        s.move(1); s.move(1)
+        val act = s.activate()
+        assertTrue(act is InboxNavState.NavAction.Dictate)
+        assertNull((act as InboxNavState.NavAction.Dictate).quoting)
+    }
+
+    @Test
+    fun `read-only chat never offers voice dictation even with STT enabled`() {
+        val s = stateWithInbox(chat("a"))
+        s.setSttEnabled(true)
+        s.setConversation(chat("a"), listOf(Message(id = "m1")), atStart = true, canSend = false, canReact = false)
+        // Only the message row exists; SELECT can never yield a Dictate action.
+        repeat(3) {
+            assertTrue(s.activate() !is InboxNavState.NavAction.Dictate)
+            s.move(1)
+        }
+    }
+
+    @Test
+    fun `dictation confirm flow sends the transcript or redictates`() {
+        val s = InboxNavState()
+        s.enterListening(null)
+        assertEquals(InboxNavState.View.LISTENING, s.view)
+        assertTrue(s.activate() is InboxNavState.NavAction.StopListening) // tap = stop+transcribe
+        s.showTranscript("comprar leite")
+        assertEquals(InboxNavState.View.CONFIRM_SEND, s.view)
+        assertEquals("comprar leite", s.currentTranscript)
+        assertTrue(s.activate() is InboxNavState.NavAction.SendTranscript) // row 0 = Enviar
+        s.move(1)
+        assertTrue(s.activate() is InboxNavState.NavAction.Redictate) // row 1 = Regravar
+    }
+
+    @Test
+    fun `back while listening returns to the conversation`() {
+        val s = stateWithInbox(chat("a"))
+        s.setConversation(chat("a"), listOf(Message(id = "m1")), atStart = true, canSend = true, canReact = false)
+        s.enterListening(null)
+        assertFalse(s.back())
+        assertEquals(InboxNavState.View.CHAT, s.view)
     }
 }

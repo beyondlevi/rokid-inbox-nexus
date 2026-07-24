@@ -13,8 +13,8 @@ android {
         applicationId = "com.rokid.inbox.nexus"
         minSdk = 31
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 3
+        versionName = "1.1.0"
     }
 
     compileOptions {
@@ -37,7 +37,7 @@ android {
 }
 
 dependencies {
-    implementation("com.github.Anezium.Rokid-Nexus:bus-client:sdk-v0.1.1")
+    implementation("com.github.Anezium.Rokid-Nexus:bus-client:sdk-v0.2.0")
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.appcompat:appcompat:1.6.1")
     implementation("androidx.security:security-crypto:1.0.0")

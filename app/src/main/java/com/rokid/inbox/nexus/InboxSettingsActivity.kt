@@ -66,6 +66,8 @@ class InboxSettingsActivity : Activity() {
         gap(24)
         renderOpenAi()
         gap(24)
+        renderStt()
+        gap(24)
         renderQuickMessages()
         gap(24)
 
@@ -221,6 +223,46 @@ class InboxSettingsActivity : Activity() {
         save.setOnClickListener {
             store.setOpenAiKey(key.text.toString().trim())
             toast("Chave salva")
+        }
+        card.addView(save, NexusUi.block())
+        addView(card)
+    }
+
+    /* ---------------- voice / STT ---------------- */
+
+    private fun renderStt() {
+        addView(NexusUi.sectionRow(this, "Voz (ditado / STT)"))
+        gap(10)
+        val card = NexusUi.card(this)
+        card.addView(
+            NexusUi.cardBody(
+                this,
+                "Dite respostas pelos oculos. Usa a mesma chave OpenAI acima e requer o microfone " +
+                    "aprovado em Plugin access (o app Nexus pede na primeira vez).",
+            ),
+            NexusUi.block(),
+        )
+        val enabled = store.isSttEnabled()
+        val toggle = NexusUi.pillButton(this, if (enabled) "Ditado: ATIVADO" else "Ditado: DESATIVADO", enabled)
+        toggle.setOnClickListener {
+            store.setSttEnabled(!enabled)
+            toast(if (!enabled) "Ditado ativado" else "Ditado desativado")
+            content.post { render() } // defer rebuild; never tear down the view mid-click
+        }
+        card.addView(toggle, NexusUi.block())
+        card.addView(BusTheme.gap(this, 8))
+        val lang = field("Idioma (ex: pt, en) — vazio = automatico")
+        lang.setText(store.getSttLanguage())
+        card.addView(lang, NexusUi.block())
+        val model = field("Modelo (${SpeechToText.MODELS.values.joinToString(" / ")})")
+        model.setText(store.getSttModel())
+        card.addView(model, NexusUi.block())
+        card.addView(BusTheme.gap(this, 8))
+        val save = NexusUi.pillButton(this, "Salvar voz", true)
+        save.setOnClickListener {
+            store.setSttLanguage(lang.text.toString().trim())
+            store.setSttModel(model.text.toString().trim())
+            toast("Config de voz salva")
         }
         card.addView(save, NexusUi.block())
         addView(card)

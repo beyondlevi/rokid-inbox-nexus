@@ -65,6 +65,27 @@ class InboxConfigStore(context: Context) {
         prefs.edit().putString(KEY_QUICK, gson.toJson(list)).apply()
     }
 
+    /* ---------------- speech-to-text (voice dictation) ---------------- */
+
+    fun isSttEnabled(): Boolean = prefs.getBoolean(KEY_STT_ENABLED, false)
+
+    fun setSttEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_STT_ENABLED, enabled).apply()
+    }
+
+    /** Forced transcription language (ISO code); blank = auto-detect. */
+    fun getSttLanguage(): String = prefs.getString(KEY_STT_LANG, "").orEmpty()
+
+    fun setSttLanguage(code: String) {
+        prefs.edit().putString(KEY_STT_LANG, code.trim()).apply()
+    }
+
+    fun getSttModel(): String = prefs.getString(KEY_STT_MODEL, SpeechToText.DEFAULT_MODEL).orEmpty()
+
+    fun setSttModel(model: String) {
+        prefs.edit().putString(KEY_STT_MODEL, model.trim().ifBlank { SpeechToText.DEFAULT_MODEL }).apply()
+    }
+
     private fun createPrefs(context: Context): SharedPreferences =
         runCatching {
             val masterKeyAlias = MasterKeys.getOrCreate(MasterKeys.AES256_GCM_SPEC)
@@ -85,6 +106,9 @@ class InboxConfigStore(context: Context) {
         private const val KEY_BOXES = "boxes.v1"
         private const val KEY_OPENAI = "openai.key"
         private const val KEY_QUICK = "quick.v1"
+        private const val KEY_STT_ENABLED = "stt.enabled"
+        private const val KEY_STT_LANG = "stt.language"
+        private const val KEY_STT_MODEL = "stt.model"
 
         private val DEFAULT_QUICK = listOf(
             QuickMessage("Estou chegando", "Oi! Estou chegando, ja te encontro."),

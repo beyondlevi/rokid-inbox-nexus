@@ -33,13 +33,18 @@ class InboxRuntime(
     private val appContext: Context,
     private val host: SurfaceHost,
 ) {
-    /** The service renders NavState screens/images; keeps the SDK out of the runtime. */
+    /** The service renders NavState screens/images and owns the mic session. */
     interface SurfaceHost {
         fun renderCard(screen: InboxNavState.Screen)
         /** @return true if the image was shown; false = image surface unavailable. */
         fun renderImage(contentKey: String, title: String, caption: String, jpeg: ByteArray, width: Int, height: Int): Boolean
         fun selfClose()
+        /** Acquire the glasses-mic lease; audio is delivered back via onMic*. */
+        fun startMic(): MicStart
+        fun stopMic()
     }
+
+    enum class MicStart { SENT, NOT_GRANTED, NOT_READY, UNAVAILABLE }
 
     val nav = InboxNavState()
 
@@ -47,7 +52,14 @@ class InboxRuntime(
     private val config = InboxConfigStore(appContext)
     private var services: List<ChannelService> = emptyList()
     private var ai: AiDescriber = AiDescriber("")
+    private var stt: SpeechToText = SpeechToText("")
     private var chatLimit = INITIAL_LIMIT
+
+    // Voice capture buffer (raw 16 kHz mono PCM16 from the glasses mic).
+    private val micBuffer = ByteArrayOutputStream()
+    private var micSampleRate = 16_000
+    private var listening = false
+    private var cancelDictation = false
 
     /* ---------------- lifecycle ---------------- */
 
@@ -57,8 +69,10 @@ class InboxRuntime(
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
         val openAiKey = config.getOpenAiKey()
         ai = AiDescriber(openAiKey)
+        stt = SpeechToText(openAiKey, config.getSttModel(), config.getSttLanguage())
         services = instantiateServices()
         nav.setAiConfigured(ai.isConfigured)
+        nav.setSttEnabled(config.isSttEnabled() && stt.isConfigured)
         nav.setQuickMessages(config.getQuickMessages())
         nav.resetToInbox()
         nav.setStatus("Carregando inbox...")
@@ -75,6 +89,11 @@ class InboxRuntime(
     fun onNext() { nav.move(1); render() }
     fun onPrev() { nav.move(-1); render() }
     fun onBack() {
+        // BACK while listening cancels the dictation without transcribing.
+        if (nav.view == InboxNavState.View.LISTENING && listening) {
+            cancelDictation = true
+            host.stopMic()
+        }
         if (nav.back()) host.selfClose() else render()
     }
 
@@ -99,7 +118,101 @@ class InboxRuntime(
             is InboxNavState.NavAction.Describe -> describe(action.message)
             is InboxNavState.NavAction.SendQuick -> sendText(action.quick.body, nav.quotingMessage())
             is InboxNavState.NavAction.SendReaction -> react(action.message, action.emoji)
+            is InboxNavState.NavAction.Dictate -> startDictation(action.quoting)
+            InboxNavState.NavAction.StopListening -> {
+                nav.setStatus("Transcrevendo...")
+                render()
+                host.stopMic()
+            }
+            InboxNavState.NavAction.SendTranscript -> {
+                val text = nav.currentTranscript.trim()
+                if (text.isBlank()) { nav.showInfo("Voz", listOf("Nada para enviar.")); render() }
+                else sendText(text, nav.quotingMessage())
+            }
+            InboxNavState.NavAction.Redictate -> startDictation(nav.quotingMessage())
         }
+    }
+
+    /* ---------------- voice dictation (mic -> STT) ---------------- */
+
+    private fun startDictation(quoting: Message?) {
+        if (!stt.isConfigured) {
+            nav.showInfo("Voz", listOf("Configure a chave OpenAI e ative o STT nos ajustes do celular."))
+            render(); return
+        }
+        micBuffer.reset()
+        cancelDictation = false
+        listening = false
+        nav.enterListening(quoting)
+        nav.setStatus("Solicitando microfone...")
+        render()
+        when (host.startMic()) {
+            MicStart.SENT -> Unit // wait for onMicStarted / onMicStopped
+            MicStart.NOT_GRANTED -> {
+                nav.showInfo("Voz", listOf("Ative o microfone para este plugin em Plugin access (no app Nexus)."))
+                render()
+            }
+            MicStart.NOT_READY -> {
+                nav.showInfo("Voz", listOf("Hub ainda nao conectado. Tente de novo."))
+                render()
+            }
+            MicStart.UNAVAILABLE -> {
+                nav.showInfo("Voz", listOf("Microfone indisponivel."))
+                render()
+            }
+        }
+    }
+
+    /** Mic callbacks, forwarded by the service (serialized on the main thread). */
+    fun onMicStarted(sampleRate: Int) {
+        micSampleRate = if (sampleRate > 0) sampleRate else 16_000
+        micBuffer.reset()
+        listening = true
+        if (nav.view == InboxNavState.View.LISTENING) {
+            nav.setStatus("Ouvindo... toque para parar.")
+            render()
+        }
+    }
+
+    fun onMicFrame(pcm: ByteArray) {
+        if (listening) micBuffer.write(pcm)
+    }
+
+    fun onMicStopped(reason: String) {
+        listening = false
+        val audioBytes = micBuffer.toByteArray()
+        micBuffer.reset()
+        if (cancelDictation) { cancelDictation = false; return }
+        if (reason != "RELEASED") {
+            nav.showInfo("Voz", listOf(micErrorText(reason)))
+            render(); return
+        }
+        transcribeBuffer(audioBytes)
+    }
+
+    private fun transcribeBuffer(audioBytes: ByteArray) {
+        nav.setStatus("Transcrevendo...")
+        render()
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching { stt.transcribe(audioBytes, micSampleRate) }
+            }
+            result.onSuccess { text ->
+                if (text.isBlank()) nav.showInfo("Voz", listOf("Nao entendi. Tente de novo."))
+                else nav.showTranscript(text)
+            }.onFailure {
+                nav.showInfo("Voz", listOf("Falha na transcricao: ${it.message?.take(160).orEmpty()}"))
+            }
+            render()
+        }
+    }
+
+    private fun micErrorText(reason: String): String = when (reason) {
+        "REVOKED" -> "Microfone perdido (link caiu ou outro app assumiu)."
+        "DENIED_BUSY" -> "Microfone em uso por outro plugin."
+        "DENIED_NO_LINK" -> "Sem conexao com os oculos."
+        "DENIED_NOT_GRANTED" -> "Ative o microfone para este plugin em Plugin access."
+        else -> "Falha ao capturar audio."
     }
 
     /* ---------------- operations ---------------- */

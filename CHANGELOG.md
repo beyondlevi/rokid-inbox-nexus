@@ -2,6 +2,30 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.1.0] - 2026-07-24
+
+### Added
+- Voice dictation (speech-to-text) from the glasses, using the new Nexus
+  microphone endpoint (`NexusAudioSession`, SDK `sdk-v0.2.0`). From a
+  conversation, pick **Ditar por voz** (reply to the chat) or **Ditar resposta
+  (voz)** on a message (quoted reply): the glasses mic streams 16 kHz PCM to the
+  phone over the hub, the phone transcribes it, and you confirm the transcript
+  before sending. The STT path is transposed from the maintainer's Rokid Relay
+  reference (the OpenAI buffered engine) and reuses the OpenAI key already
+  configured for AI descriptions.
+- Voice settings in the plugin settings screen: enable/disable, forced
+  transcription language, and the transcription model.
+- `microphone` capability + `/audio` receive prefix. No Android `RECORD_AUDIO`
+  permission — the PCM arrives over the hub, not the phone mic.
+
+### Changed
+- SDK bumped to `sdk-v0.2.0` (adds the microphone endpoint).
+
+### Note
+- Adding the `microphone` capability changes the capability set, so the plugin's
+  grant resets to **Pending** — re-approve it (now including the microphone) in
+  the Nexus app under Plugin access after updating.
+
 ## [1.0.1] - 2026-07-23
 
 ### Fixed

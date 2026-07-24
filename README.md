@@ -21,6 +21,9 @@ surfaces the hub renders, driven by the R08 ring.
   filter toggle (all / unread).
 - **Reply** with configurable **quick messages** (canned replies), optionally
   quoting a message.
+- **Dictate by voice** (v1.1.0) — pick "Ditar por voz" in a conversation, speak,
+  and the glasses microphone streams to the phone (over the hub) where it is
+  transcribed; confirm the transcript and send. Reuses your OpenAI key.
 - **React** with emoji (WhatsApp / Telegram).
 - **View photos** on the HUD via the Nexus image surface (downscaled and
   re-encoded on the phone to fit the surface limits).
@@ -39,9 +42,9 @@ SELECT (activate), BACK (up / self-close).
 |---|---|
 | Standalone glasses APK + custom HUD | Removed — the hub renders declarative surfaces |
 | CXR / BLE / SPP transport + versioned handshake | Removed — replaced by the Nexus local bus |
-| Voice reply (mic on glasses → Whisper) | **Dropped** — Nexus disables the `microphone` capability in the phone approval UI and exposes no speech-to-text bus endpoint, so on-glasses dictation is not shippable today |
-| Voice search of chats | **Dropped** — same reason (no STT on the HUD) |
-| Whisper transcription | Removed with the voice features |
+| Voice reply (mic on glasses → transcription) | **Restored in v1.1.0** — the SDK `sdk-v0.2.0` microphone endpoint streams glasses-mic PCM to the phone over the hub; the phone transcribes (OpenAI) and you confirm before sending. Dictate to the chat or quoting a message. |
+| Voice search of chats | Not ported — voice is wired to reply dictation only for now |
+| Whisper / OpenAI transcription | Restored (phone-side) for the voice-reply dictation |
 | Inbox / conversation browsing | Kept — `NexusCard` surfaces |
 | Quick-message replies, quoted replies | Kept |
 | Emoji reactions | Kept |
@@ -55,8 +58,9 @@ verbatim; only their package moved to `com.rokid.inbox.nexus`.
 ## How it's built (Nexus model)
 
 - **One exported `NexusPluginService`** (`InboxPluginService`) carrying the
-  descriptor (id `rokid-inbox`, API version 3, capability `surfaces`). No
-  launcher icon, no `MAIN`/`LAUNCHER` — the plugin is headless.
+  descriptor (id `rokid-inbox`, API version 3, capabilities `surfaces` +
+  `microphone`). No launcher icon, no `MAIN`/`LAUNCHER` — the plugin is
+  headless.
 - **`InboxRuntime`** — the phone-side brain: builds the channel services from
   config on each open, runs all I/O, executes navigation intents, preprocesses
   images, and pushes surfaces.
@@ -89,13 +93,21 @@ JDK 17 + Android SDK/build-tools 36. From the repo root:
 
 Output: `app/build/outputs/apk/debug/inbox-nexus-debug.apk`.
 
-The SDK (`com.github.Anezium.Rokid-Nexus:bus-client`) resolves from JitPack.
+The SDK (`com.github.Anezium.Rokid-Nexus:bus-client:sdk-v0.2.0`) resolves from
+JitPack. The microphone/STT feature requires `sdk-v0.2.0` (the microphone
+endpoint). If JitPack has not built that tag yet, resolve it locally instead:
+clone `Anezium/Rokid-Nexus`, run
+`./gradlew :shared:publishToMavenLocal :bus-client:publishToMavenLocal -PversionName=0.2.0`,
+add `mavenLocal()` to `settings.gradle.kts`, and depend on
+`com.github.Anezium.Rokid-Nexus:bus-client:0.2.0`.
 
 ## Install → approve → launch (on the hardware)
 
 1. `adb install -r app/build/outputs/apk/debug/inbox-nexus-debug.apk`
 2. Phone: **Rokid Nexus → Settings → Plugin access → Inbox → approve** the
-   `surfaces` capability (installing grants nothing).
+   `surfaces` **and `microphone`** capabilities (installing grants nothing;
+   updating a plugin whose capability set changed resets the grant to Pending,
+   so re-approve after this update).
 3. Open the plugin's settings from the Nexus app and configure at least one
    channel (and, optionally, the OpenAI key).
 4. Glasses: open **Inbox** from the launcher and drive it with the R08 ring.

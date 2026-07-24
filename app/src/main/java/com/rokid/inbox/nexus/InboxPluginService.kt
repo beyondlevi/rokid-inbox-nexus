@@ -1,6 +1,10 @@
 package com.rokid.inbox.nexus
 
 import android.view.KeyEvent
+import com.anezium.rokidbus.client.plugin.NexusAudioCallbacks
+import com.anezium.rokidbus.client.plugin.NexusAudioFormat
+import com.anezium.rokidbus.client.plugin.NexusAudioSession
+import com.anezium.rokidbus.client.plugin.NexusAudioStopReason
 import com.anezium.rokidbus.client.plugin.NexusCard
 import com.anezium.rokidbus.client.plugin.NexusImage
 import com.anezium.rokidbus.client.plugin.NexusPluginService
@@ -20,6 +24,7 @@ class InboxPluginService : NexusPluginService(), InboxRuntime.SurfaceHost {
 
     private val runtime by lazy { InboxRuntime(applicationContext, this) }
     private var surface: NexusSurfaceSession? = null
+    private var audio: NexusAudioSession? = null
     private var cardShown = false
 
     override fun onNexusOpen() {
@@ -30,6 +35,8 @@ class InboxPluginService : NexusPluginService(), InboxRuntime.SurfaceHost {
 
     override fun onNexusClose() {
         runtime.close()
+        audio?.stop()
+        audio = null
         surface?.hide()
         surface = null
         cardShown = false
@@ -89,6 +96,34 @@ class InboxPluginService : NexusPluginService(), InboxRuntime.SurfaceHost {
 
     override fun selfClose() {
         surface?.hide()
+    }
+
+    override fun startMic(): InboxRuntime.MicStart {
+        val session = nexusAudioSession(object : NexusAudioCallbacks {
+            override fun onAudioStarted(format: NexusAudioFormat) {
+                runtime.onMicStarted(format.sampleRate)
+            }
+
+            override fun onAudioFrame(pcm: ByteArray, seq: Long, elapsedRealtimeMs: Long) {
+                runtime.onMicFrame(pcm)
+            }
+
+            override fun onAudioStopped(reason: NexusAudioStopReason) {
+                audio = null
+                runtime.onMicStopped(reason.name)
+            }
+        }) ?: return InboxRuntime.MicStart.UNAVAILABLE
+        audio = session
+        return when (session.start()) {
+            NexusSdkResult.SENT -> InboxRuntime.MicStart.SENT
+            NexusSdkResult.CAPABILITY_NOT_GRANTED -> InboxRuntime.MicStart.NOT_GRANTED
+            NexusSdkResult.NOT_REGISTERED -> InboxRuntime.MicStart.NOT_READY
+            else -> InboxRuntime.MicStart.UNAVAILABLE
+        }
+    }
+
+    override fun stopMic() {
+        audio?.stop()
     }
 
     /** Stable, bounded contentKey: hash the seed so it never exceeds 128 chars. */

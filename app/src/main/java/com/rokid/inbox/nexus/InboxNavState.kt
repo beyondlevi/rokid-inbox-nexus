@@ -18,7 +18,7 @@ import com.rokid.inbox.nexus.model.QuickMessage
  */
 class InboxNavState {
 
-    enum class View { INBOX, CHAT, MSG_ACTIONS, QUICK, REACT, INFO, IMAGE }
+    enum class View { INBOX, CHAT, MSG_ACTIONS, QUICK, REACT, INFO, IMAGE, LISTENING, CONFIRM_SEND }
     enum class Filter { ALL, UNREAD }
 
     /** What a SELECT on the focused row means; the runtime executes it. */
@@ -39,6 +39,14 @@ class InboxNavState {
         data class Describe(val message: Message) : NavAction
         data class SendQuick(val quick: QuickMessage) : NavAction
         data class SendReaction(val message: Message, val emoji: String) : NavAction
+        /** Start voice dictation of a reply (optionally quoting a message). */
+        data class Dictate(val quoting: Message?) : NavAction
+        /** Stop capturing and transcribe what was said. */
+        data object StopListening : NavAction
+        /** Send the confirmed transcript as a reply. */
+        data object SendTranscript : NavAction
+        /** Discard the transcript and dictate again. */
+        data object Redictate : NavAction
     }
 
     /** A ready-to-render card model; the service hashes [keySeed] into contentKey. */
@@ -69,6 +77,11 @@ class InboxNavState {
     private var infoTitle: String = ""
     private var infoLines: List<String> = emptyList()
     private var statusLine: String? = null
+    private var sttEnabled: Boolean = false
+    private var transcript: String = ""
+
+    /** The transcript awaiting confirmation in the CONFIRM_SEND view. */
+    val currentTranscript: String get() = transcript
 
     // Per-view selection (kept so BACK restores the parent's focus)
     private var inboxIndex = 0
@@ -76,6 +89,7 @@ class InboxNavState {
     private var actionsIndex = 0
     private var quickIndex = 0
     private var reactIndex = 0
+    private var confirmIndex = 0
 
     val reactions: List<Pair<String, String>> = listOf(
         "👍" to "Curtir",
@@ -90,6 +104,7 @@ class InboxNavState {
 
     fun setAiConfigured(value: Boolean) { aiConfigured = value }
     fun setQuickMessages(list: List<QuickMessage>) { quickMessages = list }
+    fun setSttEnabled(value: Boolean) { sttEnabled = value }
 
     fun setInbox(chats: List<Chat>) {
         allChats = chats
@@ -155,6 +170,7 @@ class InboxNavState {
                 } else {
                     when (chatActionRows().getOrNull(chatIndex - msgs.size)) {
                         ROW_REPLY -> NavAction.ReplyToChat
+                        ROW_DICTATE -> NavAction.Dictate(null)
                         ROW_LOAD_OLDER -> NavAction.LoadOlder
                         else -> NavAction.None
                     }
@@ -167,6 +183,7 @@ class InboxNavState {
                     ROW_DESCRIBE -> NavAction.Describe(m)
                     ROW_REACT -> NavAction.React(m)
                     ROW_REPLY_QUOTE -> NavAction.ReplyQuoting(m)
+                    ROW_DICTATE_QUOTE -> NavAction.Dictate(m)
                     else -> NavAction.None
                 }
             }
@@ -174,6 +191,11 @@ class InboxNavState {
             View.REACT -> {
                 val m = selectedMessage ?: return NavAction.None
                 reactions.getOrNull(reactIndex)?.let { NavAction.SendReaction(m, it.first) } ?: NavAction.None
+            }
+            View.LISTENING -> NavAction.StopListening
+            View.CONFIRM_SEND -> when (confirmIndex) {
+                0 -> NavAction.SendTranscript
+                else -> NavAction.Redictate
             }
             View.INFO, View.IMAGE -> NavAction.None
         }
@@ -198,6 +220,22 @@ class InboxNavState {
         view = View.REACT
     }
 
+    /** Begin voice dictation of a reply (quoting [quoting] when non-null). */
+    fun enterListening(quoting: Message?) {
+        this.quoting = quoting
+        transcript = ""
+        statusLine = null
+        view = View.LISTENING
+    }
+
+    /** Show the transcribed text for confirmation before sending. */
+    fun showTranscript(text: String) {
+        transcript = text
+        confirmIndex = 0
+        statusLine = null
+        view = View.CONFIRM_SEND
+    }
+
     fun quotingMessage(): Message? = quoting
 
     /** BACK: pop to the parent view; true means "self-close at root". */
@@ -209,6 +247,8 @@ class InboxNavState {
             View.MSG_ACTIONS -> view = View.CHAT
             View.QUICK -> view = if (quoting != null) View.MSG_ACTIONS else View.CHAT
             View.REACT -> view = View.MSG_ACTIONS
+            View.LISTENING -> view = if (quoting != null) View.MSG_ACTIONS else View.CHAT
+            View.CONFIRM_SEND -> view = if (quoting != null) View.MSG_ACTIONS else View.CHAT
             View.INFO -> view = if (openChat != null) View.CHAT else View.INBOX
             View.IMAGE -> view = View.CHAT
         }
@@ -223,6 +263,8 @@ class InboxNavState {
         View.MSG_ACTIONS -> actionsScreen()
         View.QUICK -> quickScreen()
         View.REACT -> reactScreen()
+        View.LISTENING -> listeningScreen()
+        View.CONFIRM_SEND -> confirmSendScreen()
         View.INFO -> infoScreen()
         View.IMAGE -> Screen("Foto", listOf("Exibindo imagem..."), "voltar", "image")
     }
@@ -314,6 +356,31 @@ class InboxNavState {
         )
     }
 
+    private fun listeningScreen(): Screen = Screen(
+        title = "Ouvindo",
+        lines = listOf(
+            "  Fale sua resposta.",
+            "  ${statusLine ?: "Toque para parar e transcrever."}",
+        ),
+        footer = "toque parar · duplo cancelar",
+        keySeed = "listen|${quoting?.id ?: ""}|${statusLine ?: ""}",
+    )
+
+    private fun confirmSendScreen(): Screen {
+        val head = transcript.take(240).ifBlank { "(nada reconhecido)" }
+        val rows = listOf(
+            row(confirmIndex == 0, "Enviar"),
+            row(confirmIndex == 1, "Regravar"),
+        )
+        val extra = statusLine?.let { listOf("  $it") } ?: emptyList()
+        return Screen(
+            title = if (quoting != null) "Enviar (citando)" else "Enviar resposta",
+            lines = listOf(head, "") + rows + extra,
+            footer = "girar mover · toque ok · duplo cancelar",
+            keySeed = "confirm|${confirmIndex}|${transcript.length}|${statusLine ?: ""}",
+        )
+    }
+
     private fun infoScreen(): Screen = Screen(
         title = infoTitle.ifBlank { "Info" },
         lines = wrap(infoLines),
@@ -341,6 +408,7 @@ class InboxNavState {
     private fun chatActionRows(): List<String> {
         val rows = ArrayList<String>()
         if (canSendOpen) rows += ROW_REPLY
+        if (canSendOpen && sttEnabled) rows += ROW_DICTATE
         if (!atStart) rows += ROW_LOAD_OLDER
         return rows
     }
@@ -352,6 +420,7 @@ class InboxNavState {
         if (m.canDescribe && aiConfigured) rows += ROW_DESCRIBE
         if (canReactOpen) rows += ROW_REACT
         if (canSendOpen) rows += ROW_REPLY_QUOTE
+        if (canSendOpen && sttEnabled) rows += ROW_DICTATE_QUOTE
         return rows
     }
 
@@ -361,7 +430,8 @@ class InboxNavState {
         View.MSG_ACTIONS -> messageActionRows().size
         View.QUICK -> quickMessages.size
         View.REACT -> reactions.size
-        View.INFO, View.IMAGE -> 0
+        View.CONFIRM_SEND -> 2
+        View.INFO, View.IMAGE, View.LISTENING -> 0
     }
 
     private fun currentIndex(): Int = when (view) {
@@ -370,7 +440,8 @@ class InboxNavState {
         View.MSG_ACTIONS -> actionsIndex
         View.QUICK -> quickIndex
         View.REACT -> reactIndex
-        View.INFO, View.IMAGE -> 0
+        View.CONFIRM_SEND -> confirmIndex
+        View.INFO, View.IMAGE, View.LISTENING -> 0
     }
 
     private fun setCurrentIndex(v: Int) {
@@ -380,7 +451,8 @@ class InboxNavState {
             View.MSG_ACTIONS -> actionsIndex = v
             View.QUICK -> quickIndex = v
             View.REACT -> reactIndex = v
-            View.INFO, View.IMAGE -> {}
+            View.CONFIRM_SEND -> confirmIndex = v
+            View.INFO, View.IMAGE, View.LISTENING -> {}
         }
     }
 
@@ -464,10 +536,12 @@ class InboxNavState {
         const val VISIBLE_ROWS = 6 // rows that fit the HUD card at glance distance
 
         private const val ROW_REPLY = "Responder"
+        private const val ROW_DICTATE = "Ditar por voz"
         private const val ROW_LOAD_OLDER = "Carregar mais"
         private const val ROW_VIEW_PHOTO = "Ver foto"
         private const val ROW_DESCRIBE = "Descrever (IA)"
         private const val ROW_REACT = "Reagir"
         private const val ROW_REPLY_QUOTE = "Responder citando"
+        private const val ROW_DICTATE_QUOTE = "Ditar resposta (voz)"
     }
 }
