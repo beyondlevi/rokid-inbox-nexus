@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.1.1] - 2026-07-24
+
+### Changed
+- Pin the SDK to `sdk-v0.2.1`, the maintainer's re-release of the microphone
+  endpoint that builds cleanly on JitPack (the earlier `sdk-v0.2.0` tag failed
+  JitPack's build). No functional change to the plugin; this is the first
+  voice-capable build that resolves from a clean clone.
+
 ## [1.1.0] - 2026-07-24
 
 ### Added
