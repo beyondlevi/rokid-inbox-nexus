@@ -108,6 +108,7 @@ class InboxRuntime(
             InboxNavState.NavAction.None -> Unit
             InboxNavState.NavAction.CycleFilter -> { nav.cycleFilter(); render() }
             InboxNavState.NavAction.Refresh -> fetchInbox()
+            InboxNavState.NavAction.VoiceSearch -> startVoiceSearch()
             is InboxNavState.NavAction.OpenChat -> openChat(action.chat, INITIAL_LIMIT)
             InboxNavState.NavAction.LoadOlder -> nav.openChat?.let { openChat(it, chatLimit + INITIAL_LIMIT) }
             is InboxNavState.NavAction.OpenMessage -> { nav.enterMessageActions(action.message); render() }
@@ -135,7 +136,11 @@ class InboxRuntime(
 
     /* ---------------- voice dictation (mic -> STT) ---------------- */
 
-    private fun startDictation(quoting: Message?) {
+    private fun startDictation(quoting: Message?) = beginListen { nav.enterListening(quoting) }
+
+    private fun startVoiceSearch() = beginListen { nav.enterVoiceSearch() }
+
+    private fun beginListen(enter: () -> Unit) {
         if (!stt.isConfigured) {
             nav.showInfo("Voz", listOf("Configure a chave OpenAI e ative o STT nos ajustes do celular."))
             render(); return
@@ -143,7 +148,7 @@ class InboxRuntime(
         micBuffer.reset()
         cancelDictation = false
         listening = false
-        nav.enterListening(quoting)
+        enter()
         nav.setStatus("Solicitando microfone...")
         render()
         when (host.startMic()) {
@@ -191,20 +196,36 @@ class InboxRuntime(
     }
 
     private fun transcribeBuffer(audioBytes: ByteArray) {
-        nav.setStatus("Transcrevendo...")
+        val forSearch = nav.listenPurpose == InboxNavState.ListenPurpose.SEARCH
+        nav.setStatus(if (forSearch) "Buscando..." else "Transcrevendo...")
         render()
         scope.launch {
             val result = withContext(Dispatchers.IO) {
                 runCatching { stt.transcribe(audioBytes, micSampleRate) }
             }
             result.onSuccess { text ->
-                if (text.isBlank()) nav.showInfo("Voz", listOf("Nao entendi. Tente de novo."))
-                else nav.showTranscript(text)
+                when {
+                    text.isBlank() -> { nav.showInfo("Voz", listOf("Nao entendi. Tente de novo.")); render() }
+                    forSearch -> runSearch(text)
+                    else -> { nav.showTranscript(text); render() }
+                }
             }.onFailure {
                 nav.showInfo("Voz", listOf("Falha na transcricao: ${it.message?.take(160).orEmpty()}"))
+                render()
             }
-            render()
         }
+    }
+
+    /** Search chats by the spoken name across every connected box. */
+    private suspend fun runSearch(query: String) {
+        nav.setStatus("Buscando \"${query.take(40)}\"...")
+        render()
+        val labels = InboxRuntime.computeBoxLabels(services)
+        val matches = withContext(Dispatchers.IO) {
+            runCatching { InboxAggregator.searchChatsByName(services, query, SEARCH_LIMIT) }.getOrDefault(emptyList())
+        }.map { it.copy(boxLabel = labels[it.boxId].orEmpty()) }
+        nav.showSearchResults(query, matches)
+        render()
     }
 
     private fun micErrorText(reason: String): String = when (reason) {
@@ -443,6 +464,7 @@ class InboxRuntime(
     companion object {
         private const val MAX_CHATS = 40
         private const val INITIAL_LIMIT = 20
+        private const val SEARCH_LIMIT = 200
         private const val MAX_IMAGE_BYTES = 60 * 1024
 
         fun glyph(kind: ChannelKind): String = when (kind) {

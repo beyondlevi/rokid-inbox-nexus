@@ -193,4 +193,47 @@ class InboxNavStateTest {
         assertFalse(s.back())
         assertEquals(InboxNavState.View.CHAT, s.view)
     }
+
+    @Test
+    fun `voice search is the third inbox header only when STT is enabled`() {
+        val s = stateWithInbox(chat("a"))
+        s.setSttEnabled(true)
+        assertTrue(s.activate() is InboxNavState.NavAction.CycleFilter) // 0
+        s.move(1); assertTrue(s.activate() is InboxNavState.NavAction.Refresh) // 1
+        s.move(1); assertTrue(s.activate() is InboxNavState.NavAction.VoiceSearch) // 2
+        s.move(1); assertTrue(s.activate() is InboxNavState.NavAction.OpenChat) // 3 = first chat
+    }
+
+    @Test
+    fun `no voice search header when STT is disabled`() {
+        val s = stateWithInbox(chat("a")) // STT off by default
+        s.move(2) // only two headers -> index 2 is the first chat
+        assertTrue(s.activate() is InboxNavState.NavAction.OpenChat)
+    }
+
+    @Test
+    fun `voice search dictation yields results that open a chat`() {
+        val s = stateWithInbox(chat("a"))
+        s.setSttEnabled(true)
+        s.enterVoiceSearch()
+        assertEquals(InboxNavState.View.LISTENING, s.view)
+        assertEquals(InboxNavState.ListenPurpose.SEARCH, s.listenPurpose)
+        assertTrue(s.activate() is InboxNavState.NavAction.StopListening)
+        s.showSearchResults("maria", listOf(chat("x"), chat("y")))
+        assertEquals(InboxNavState.View.SEARCH_RESULTS, s.view)
+        val act = s.activate()
+        assertTrue(act is InboxNavState.NavAction.OpenChat)
+        assertEquals("x", (act as InboxNavState.NavAction.OpenChat).chat.id)
+        assertFalse(s.back())
+        assertEquals(InboxNavState.View.INBOX, s.view) // BACK from results returns to inbox
+    }
+
+    @Test
+    fun `back while voice-searching returns to the inbox`() {
+        val s = stateWithInbox(chat("a"))
+        s.setSttEnabled(true)
+        s.enterVoiceSearch()
+        assertFalse(s.back())
+        assertEquals(InboxNavState.View.INBOX, s.view)
+    }
 }

@@ -43,7 +43,7 @@ SELECT (activate), BACK (up / self-close).
 | Standalone glasses APK + custom HUD | Removed — the hub renders declarative surfaces |
 | CXR / BLE / SPP transport + versioned handshake | Removed — replaced by the Nexus local bus |
 | Voice reply (mic on glasses → transcription) | **Restored in v1.1.0** — the SDK `sdk-v0.2.0` microphone endpoint streams glasses-mic PCM to the phone over the hub; the phone transcribes (OpenAI) and you confirm before sending. Dictate to the chat or quoting a message. |
-| Voice search of chats | Not ported — voice is wired to reply dictation only for now |
+| Voice search of chats | **Added in v1.2.0** — "Buscar por voz" in the inbox: speak a name, it's transcribed on the phone and matched across all boxes |
 | Whisper / OpenAI transcription | Restored (phone-side) for the voice-reply dictation |
 | Inbox / conversation browsing | Kept — `NexusCard` surfaces |
 | Quick-message replies, quoted replies | Kept |

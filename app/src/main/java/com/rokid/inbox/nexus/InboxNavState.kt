@@ -18,14 +18,19 @@ import com.rokid.inbox.nexus.model.QuickMessage
  */
 class InboxNavState {
 
-    enum class View { INBOX, CHAT, MSG_ACTIONS, QUICK, REACT, INFO, IMAGE, LISTENING, CONFIRM_SEND }
+    enum class View { INBOX, CHAT, MSG_ACTIONS, QUICK, REACT, INFO, IMAGE, LISTENING, CONFIRM_SEND, SEARCH_RESULTS }
     enum class Filter { ALL, UNREAD }
+
+    /** Why the mic is being captured: to dictate a reply, or to search by name. */
+    enum class ListenPurpose { REPLY, SEARCH }
 
     /** What a SELECT on the focused row means; the runtime executes it. */
     sealed interface NavAction {
         data object None : NavAction
         data object CycleFilter : NavAction
         data object Refresh : NavAction
+        /** Dictate a contact name and search chats across all boxes. */
+        data object VoiceSearch : NavAction
         data class OpenChat(val chat: Chat) : NavAction
         data object LoadOlder : NavAction
         /** SELECT on a message row -> open its per-message action menu. */
@@ -79,6 +84,12 @@ class InboxNavState {
     private var statusLine: String? = null
     private var sttEnabled: Boolean = false
     private var transcript: String = ""
+    private var searchResults: List<Chat> = emptyList()
+    private var searchQuery: String = ""
+
+    /** Whether the current LISTENING session is for a reply or a name search. */
+    var listenPurpose: ListenPurpose = ListenPurpose.REPLY
+        private set
 
     /** The transcript awaiting confirmation in the CONFIRM_SEND view. */
     val currentTranscript: String get() = transcript
@@ -90,6 +101,7 @@ class InboxNavState {
     private var quickIndex = 0
     private var reactIndex = 0
     private var confirmIndex = 0
+    private var searchIndex = 0
 
     val reactions: List<Pair<String, String>> = listOf(
         "👍" to "Curtir",
@@ -158,10 +170,17 @@ class InboxNavState {
     /** SELECT: report the intent of the focused row (runtime executes it). */
     fun activate(): NavAction {
         return when (view) {
-            View.INBOX -> when (val i = inboxIndex) {
-                0 -> NavAction.CycleFilter
-                1 -> NavAction.Refresh
-                else -> visibleChats().getOrNull(i - INBOX_HEADER_ROWS)?.let { NavAction.OpenChat(it) } ?: NavAction.None
+            View.INBOX -> {
+                val headers = inboxHeaderRows()
+                if (inboxIndex < headers.size) {
+                    when (inboxIndex) {
+                        0 -> NavAction.CycleFilter
+                        1 -> NavAction.Refresh
+                        else -> NavAction.VoiceSearch
+                    }
+                } else {
+                    visibleChats().getOrNull(inboxIndex - headers.size)?.let { NavAction.OpenChat(it) } ?: NavAction.None
+                }
             }
             View.CHAT -> {
                 val msgs = messages
@@ -197,6 +216,7 @@ class InboxNavState {
                 0 -> NavAction.SendTranscript
                 else -> NavAction.Redictate
             }
+            View.SEARCH_RESULTS -> searchResults.getOrNull(searchIndex)?.let { NavAction.OpenChat(it) } ?: NavAction.None
             View.INFO, View.IMAGE -> NavAction.None
         }
     }
@@ -223,9 +243,28 @@ class InboxNavState {
     /** Begin voice dictation of a reply (quoting [quoting] when non-null). */
     fun enterListening(quoting: Message?) {
         this.quoting = quoting
+        listenPurpose = ListenPurpose.REPLY
         transcript = ""
         statusLine = null
         view = View.LISTENING
+    }
+
+    /** Begin voice capture to search chats by contact name across all boxes. */
+    fun enterVoiceSearch() {
+        quoting = null
+        listenPurpose = ListenPurpose.SEARCH
+        transcript = ""
+        statusLine = null
+        view = View.LISTENING
+    }
+
+    /** Show the chats matching a spoken name search. */
+    fun showSearchResults(query: String, results: List<Chat>) {
+        searchQuery = query
+        searchResults = results
+        searchIndex = 0
+        statusLine = null
+        view = View.SEARCH_RESULTS
     }
 
     /** Show the transcribed text for confirmation before sending. */
@@ -247,8 +286,13 @@ class InboxNavState {
             View.MSG_ACTIONS -> view = View.CHAT
             View.QUICK -> view = if (quoting != null) View.MSG_ACTIONS else View.CHAT
             View.REACT -> view = View.MSG_ACTIONS
-            View.LISTENING -> view = if (quoting != null) View.MSG_ACTIONS else View.CHAT
+            View.LISTENING -> view = when {
+                listenPurpose == ListenPurpose.SEARCH -> View.INBOX
+                quoting != null -> View.MSG_ACTIONS
+                else -> View.CHAT
+            }
             View.CONFIRM_SEND -> view = if (quoting != null) View.MSG_ACTIONS else View.CHAT
+            View.SEARCH_RESULTS -> view = View.INBOX
             View.INFO -> view = if (openChat != null) View.CHAT else View.INBOX
             View.IMAGE -> view = View.CHAT
         }
@@ -265,17 +309,18 @@ class InboxNavState {
         View.REACT -> reactScreen()
         View.LISTENING -> listeningScreen()
         View.CONFIRM_SEND -> confirmSendScreen()
+        View.SEARCH_RESULTS -> searchResultsScreen()
         View.INFO -> infoScreen()
         View.IMAGE -> Screen("Foto", listOf("Exibindo imagem..."), "voltar", "image")
     }
 
     private fun inboxScreen(): Screen {
         val chats = visibleChats()
+        val headers = inboxHeaderRows()
         val rows = ArrayList<String>()
-        rows += row(0 == inboxIndex, "Filtro: ${if (filter == Filter.ALL) "Todos" else "Nao lidos"}")
-        rows += row(1 == inboxIndex, "Atualizar")
+        headers.forEachIndexed { i, h -> rows += row(inboxIndex == i, h) }
         chats.forEachIndexed { i, c ->
-            rows += row(inboxIndex == i + INBOX_HEADER_ROWS, chatLabel(c))
+            rows += row(inboxIndex == i + headers.size, chatLabel(c))
         }
         val body = windowed(rows, inboxIndex).toMutableList()
         if (chats.isEmpty() && statusLine == null) body += "  (sem conversas)"
@@ -284,8 +329,17 @@ class InboxNavState {
             title = "Inbox · ${if (filter == Filter.ALL) "Todos" else "Nao lidos"}",
             lines = body,
             footer = "girar mover · toque abrir · duplo sair",
-            keySeed = "inbox|${filter}|${inboxIndex}|${chats.size}|${statusLine ?: ""}",
+            keySeed = "inbox|${filter}|${inboxIndex}|${chats.size}|${sttEnabled}|${statusLine ?: ""}",
         )
+    }
+
+    /** Inbox header actions in traversal order (voice search only when STT is on). */
+    private fun inboxHeaderRows(): List<String> {
+        val rows = ArrayList<String>()
+        rows += "Filtro: ${if (filter == Filter.ALL) "Todos" else "Nao lidos"}"
+        rows += "Atualizar"
+        if (sttEnabled) rows += "Buscar por voz"
+        return rows
     }
 
     private fun chatScreen(): Screen {
@@ -356,15 +410,31 @@ class InboxNavState {
         )
     }
 
-    private fun listeningScreen(): Screen = Screen(
-        title = "Ouvindo",
-        lines = listOf(
-            "  Fale sua resposta.",
-            "  ${statusLine ?: "Toque para parar e transcrever."}",
-        ),
-        footer = "toque parar · duplo cancelar",
-        keySeed = "listen|${quoting?.id ?: ""}|${statusLine ?: ""}",
-    )
+    private fun listeningScreen(): Screen {
+        val prompt = if (listenPurpose == ListenPurpose.SEARCH) "Fale o nome do contato." else "Fale sua resposta."
+        return Screen(
+            title = if (listenPurpose == ListenPurpose.SEARCH) "Buscar por voz" else "Ouvindo",
+            lines = listOf(
+                "  $prompt",
+                "  ${statusLine ?: "Toque para parar."}",
+            ),
+            footer = "toque parar · duplo cancelar",
+            keySeed = "listen|${listenPurpose}|${quoting?.id ?: ""}|${statusLine ?: ""}",
+        )
+    }
+
+    private fun searchResultsScreen(): Screen {
+        val rows = searchResults.mapIndexed { i, c -> row(searchIndex == i, chatLabel(c)) }
+        val body = windowed(rows, searchIndex).toMutableList()
+        if (searchResults.isEmpty()) body += "  (nada encontrado)"
+        statusLine?.let { body += "  $it" }
+        return Screen(
+            title = "Busca: ${searchQuery.take(40)} (${searchResults.size})",
+            lines = body,
+            footer = "girar mover · toque abrir · duplo voltar",
+            keySeed = "search|${searchQuery}|${searchIndex}|${searchResults.size}",
+        )
+    }
 
     private fun confirmSendScreen(): Screen {
         val head = transcript.take(240).ifBlank { "(nada reconhecido)" }
@@ -401,7 +471,7 @@ class InboxNavState {
     }
 
     private fun clampInboxIndex() {
-        val n = INBOX_HEADER_ROWS + visibleChats().size
+        val n = inboxHeaderRows().size + visibleChats().size
         if (inboxIndex >= n) inboxIndex = (n - 1).coerceAtLeast(0)
     }
 
@@ -425,12 +495,13 @@ class InboxNavState {
     }
 
     private fun itemCount(): Int = when (view) {
-        View.INBOX -> INBOX_HEADER_ROWS + visibleChats().size
+        View.INBOX -> inboxHeaderRows().size + visibleChats().size
         View.CHAT -> messages.size + chatActionRows().size
         View.MSG_ACTIONS -> messageActionRows().size
         View.QUICK -> quickMessages.size
         View.REACT -> reactions.size
         View.CONFIRM_SEND -> 2
+        View.SEARCH_RESULTS -> searchResults.size
         View.INFO, View.IMAGE, View.LISTENING -> 0
     }
 
@@ -441,6 +512,7 @@ class InboxNavState {
         View.QUICK -> quickIndex
         View.REACT -> reactIndex
         View.CONFIRM_SEND -> confirmIndex
+        View.SEARCH_RESULTS -> searchIndex
         View.INFO, View.IMAGE, View.LISTENING -> 0
     }
 
@@ -452,6 +524,7 @@ class InboxNavState {
             View.QUICK -> quickIndex = v
             View.REACT -> reactIndex = v
             View.CONFIRM_SEND -> confirmIndex = v
+            View.SEARCH_RESULTS -> searchIndex = v
             View.INFO, View.IMAGE, View.LISTENING -> {}
         }
     }
@@ -532,7 +605,6 @@ class InboxNavState {
     private fun floorMod(a: Int, b: Int): Int = ((a % b) + b) % b
 
     companion object {
-        const val INBOX_HEADER_ROWS = 2 // filter toggle + refresh
         const val VISIBLE_ROWS = 6 // rows that fit the HUD card at glance distance
 
         private const val ROW_REPLY = "Responder"

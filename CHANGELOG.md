@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.2.0] - 2026-07-24
+
+### Added
+- Voice search of contacts across all boxes: a **Buscar por voz** action in the
+  inbox (shown when voice/STT is enabled) captures a spoken name, transcribes it
+  on the phone, runs the unified name search over every connected channel
+  (`InboxAggregator.searchChatsByName`), and shows the matches as a
+  ring-navigable list you can open. BACK returns to the inbox.
+
 ## [1.1.1] - 2026-07-24
 
 ### Changed
