@@ -42,6 +42,9 @@
             </intent-filter>
             <meta-data android:name="com.anezium.rokidbus.plugin.ID" android:value="rokid-inbox" />
             <meta-data android:name="com.anezium.rokidbus.plugin.DISPLAY_NAME" android:value="Inbox" />
+            <!-- Declare BOTH: the built-in key reaches the glasses launcher (a custom
+                 drawable lives only in the phone APK), the drawable is used on the phone. -->
+            <meta-data android:name="com.anezium.rokidbus.plugin.ICON" android:value="chat" />
             <meta-data android:name="com.anezium.rokidbus.plugin.ICON_DRAWABLE" android:resource="@drawable/nexus_glyph_inbox" />
             <meta-data android:name="com.anezium.rokidbus.plugin.API_VERSION" android:value="3" />
             <meta-data android:name="com.anezium.rokidbus.plugin.CAPABILITIES" android:value="surfaces,microphone" />

@@ -40,7 +40,7 @@ class InboxSettingsActivity : Activity() {
                     this@InboxSettingsActivity,
                     NexusPluginIcons.drawableFor("chat"),
                     "Rokid Inbox",
-                    "Inbox multi-canal · v1.0",
+                    "Inbox multi-canal · v${appVersion()}",
                 ),
                 NexusUi.block(),
             )
@@ -308,6 +308,13 @@ class InboxSettingsActivity : Activity() {
     private fun gap(dp: Int) = content.addView(BusTheme.gap(this, dp))
 
     private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+
+    /** Read the versionName from the package so the header never drifts from the build. */
+    private fun appVersion(): String =
+        runCatching {
+            @Suppress("DEPRECATION")
+            packageManager.getPackageInfo(packageName, 0).versionName
+        }.getOrNull().orEmpty().ifBlank { "?" }
 
     private fun kindLabel(kind: ChannelKind): String = when (kind) {
         ChannelKind.WHATSAPP -> "WhatsApp"

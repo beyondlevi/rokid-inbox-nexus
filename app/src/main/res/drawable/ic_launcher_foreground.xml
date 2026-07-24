@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Insets the monochrome plugin glyph so it feeds both the launcher icon and
+     the Android 13+ themed (monochrome) icon — the glyph then shows everywhere. -->
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:drawable="@drawable/nexus_glyph_inbox"
+    android:inset="20%" />

@@ -2,6 +2,19 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.2.1] - 2026-07-24
+
+### Fixed
+- Plugin icon on the glasses launcher: the descriptor now declares **both**
+  `ICON` (built-in `chat`) and `ICON_DRAWABLE`. A custom drawable never reaches
+  the glasses launcher (it lives in the phone APK), so the built-in key is what
+  renders there; the phone still uses the custom glyph.
+- App (phone) icon: `ic_launcher_foreground` is now an `<inset>` of the
+  monochrome plugin glyph, wired as both the adaptive `<foreground>` and
+  `<monochrome>`, so the glyph shows on the launcher and the themed icon.
+- Settings header no longer hardcodes the version ("v1.0"); it reads
+  `versionName` from the package manager, so it can't drift from the build.
+
 ## [1.2.0] - 2026-07-24
 
 ### Added
