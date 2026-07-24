@@ -229,6 +229,17 @@ class InboxNavStateTest {
     }
 
     @Test
+    fun `audio message offers a play action first`() {
+        val s = stateWithInbox(chat("a"))
+        val audio = Message(id = "v1", media = "[voice]", senderName = "X")
+        s.setConversation(chat("a"), listOf(audio), atStart = true, canSend = true, canReact = true)
+        s.enterMessageActions(audio)
+        val act = s.activate() // row 0 for a voice message
+        assertTrue(act is InboxNavState.NavAction.PlayAudio)
+        assertEquals("v1", (act as InboxNavState.NavAction.PlayAudio).message.id)
+    }
+
+    @Test
     fun `back while voice-searching returns to the inbox`() {
         val s = stateWithInbox(chat("a"))
         s.setSttEnabled(true)

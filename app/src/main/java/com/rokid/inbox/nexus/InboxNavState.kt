@@ -41,6 +41,7 @@ class InboxNavState {
         data class ReplyQuoting(val message: Message) : NavAction
         data class React(val message: Message) : NavAction
         data class ViewPhoto(val message: Message) : NavAction
+        data class PlayAudio(val message: Message) : NavAction
         data class Describe(val message: Message) : NavAction
         data class SendQuick(val quick: QuickMessage) : NavAction
         data class SendReaction(val message: Message, val emoji: String) : NavAction
@@ -199,6 +200,7 @@ class InboxNavState {
                 val m = selectedMessage ?: return NavAction.None
                 when (messageActionRows().getOrNull(actionsIndex)) {
                     ROW_VIEW_PHOTO -> NavAction.ViewPhoto(m)
+                    ROW_PLAY_AUDIO -> NavAction.PlayAudio(m)
                     ROW_DESCRIBE -> NavAction.Describe(m)
                     ROW_REACT -> NavAction.React(m)
                     ROW_REPLY_QUOTE -> NavAction.ReplyQuoting(m)
@@ -487,6 +489,7 @@ class InboxNavState {
         val m = selectedMessage ?: return emptyList()
         val rows = ArrayList<String>()
         if (m.isImageMedia) rows += ROW_VIEW_PHOTO
+        if (m.isPlayableAudio) rows += ROW_PLAY_AUDIO
         if (m.canDescribe && aiConfigured) rows += ROW_DESCRIBE
         if (canReactOpen) rows += ROW_REACT
         if (canSendOpen) rows += ROW_REPLY_QUOTE
@@ -611,6 +614,7 @@ class InboxNavState {
         private const val ROW_DICTATE = "Ditar por voz"
         private const val ROW_LOAD_OLDER = "Carregar mais"
         private const val ROW_VIEW_PHOTO = "Ver foto"
+        private const val ROW_PLAY_AUDIO = "Reproduzir audio"
         private const val ROW_DESCRIBE = "Descrever (IA)"
         private const val ROW_REACT = "Reagir"
         private const val ROW_REPLY_QUOTE = "Responder citando"

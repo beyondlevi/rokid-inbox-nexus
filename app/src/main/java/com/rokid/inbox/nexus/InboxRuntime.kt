@@ -38,6 +38,8 @@ class InboxRuntime(
         fun renderCard(screen: InboxNavState.Screen)
         /** @return true if the image was shown; false = image surface unavailable. */
         fun renderImage(contentKey: String, title: String, caption: String, jpeg: ByteArray, width: Int, height: Int): Boolean
+        /** Whether the glasses image surface (SPP binary plane) is available right now. */
+        fun supportsImage(): Boolean
         fun selfClose()
         /** Acquire the glasses-mic lease; audio is delivered back via onMic*. */
         fun startMic(): MicStart
@@ -61,12 +63,28 @@ class InboxRuntime(
     private var listening = false
     private var cancelDictation = false
 
+    // Photo pending an image-surface (SPP) window, and the current audio player.
+    private var pendingPhoto: PendingPhoto? = null
+    private var mediaPlayer: android.media.MediaPlayer? = null
+
+    private data class PendingPhoto(
+        val contentKey: String,
+        val jpeg: ByteArray,
+        val width: Int,
+        val height: Int,
+        val caption: String,
+        val fallback: String,
+    )
+
     /* ---------------- lifecycle ---------------- */
 
     fun open() {
         // Re-entrant open: rebuild everything fresh (the process may be cold).
         scope.cancel()
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+        pendingPhoto = null
+        runCatching { mediaPlayer?.release() }
+        mediaPlayer = null
         val openAiKey = config.getOpenAiKey()
         ai = AiDescriber(openAiKey)
         stt = SpeechToText(openAiKey, config.getSttModel(), config.getSttLanguage())
@@ -82,6 +100,9 @@ class InboxRuntime(
 
     fun close() {
         scope.cancel()
+        pendingPhoto = null
+        runCatching { mediaPlayer?.release() }
+        mediaPlayer = null
     }
 
     /* ---------------- input (from the service) ---------------- */
@@ -116,6 +137,7 @@ class InboxRuntime(
             is InboxNavState.NavAction.ReplyQuoting -> { nav.enterQuick(action.message); render() }
             is InboxNavState.NavAction.React -> { nav.enterReact(action.message); render() }
             is InboxNavState.NavAction.ViewPhoto -> viewPhoto(action.message)
+            is InboxNavState.NavAction.PlayAudio -> playAudio(action.message)
             is InboxNavState.NavAction.Describe -> describe(action.message)
             is InboxNavState.NavAction.SendQuick -> sendText(action.quick.body, nav.quotingMessage())
             is InboxNavState.NavAction.SendReaction -> react(action.message, action.emoji)
@@ -326,7 +348,7 @@ class InboxRuntime(
 
     private fun viewPhoto(message: Message) {
         val chat = nav.openChat ?: return
-        nav.setStatus("Carregando foto...")
+        nav.showInfo("Foto", listOf("Carregando foto..."))
         render()
         scope.launch {
             val svc = serviceFor(chat.boxId)
@@ -342,20 +364,89 @@ class InboxRuntime(
                 nav.showInfo("Foto", listOf("Nao foi possivel decodificar a imagem."))
                 render(); return@launch
             }
-            val shown = host.renderImage(
+            val fallback = message.text.ifBlank { message.senderName.ifBlank { "Foto" } }.take(160)
+            pendingPhoto = PendingPhoto(
                 contentKey = "photo-${chat.boxId}-${message.id}",
-                title = "Foto",
-                caption = if (message.senderName.isNotBlank()) message.senderName else "",
                 jpeg = img.bytes,
                 width = img.width,
                 height = img.height,
+                caption = message.senderName,
+                fallback = fallback,
             )
-            if (shown) {
-                nav.enterImage()
-            } else {
-                nav.showInfo("Foto", listOf("Pre-visualizacao de imagem indisponivel nestes oculos."))
+            // The image surface needs the SPP binary plane (supportsImage). It can be
+            // transiently down; wait for it and retry instead of giving up at once.
+            if (flushPhoto()) return@launch
+            nav.showInfo("Foto", listOf("Carregando foto (aguardando canal de imagem)..."))
+            render()
+            val deadline = android.os.SystemClock.elapsedRealtime() + PHOTO_WAIT_MS
+            while (pendingPhoto != null && android.os.SystemClock.elapsedRealtime() < deadline) {
+                kotlinx.coroutines.delay(700)
+                if (flushPhoto()) return@launch
+            }
+            pendingPhoto?.let {
+                pendingPhoto = null
+                nav.showInfo("Foto", listOf(it.fallback, "", "Canal de imagem inativo — nao consegui exibir a foto. Tente com os oculos conectados e vestidos."))
                 render()
             }
+        }
+    }
+
+    /** Send the pending photo if the image surface (SPP) is available now. */
+    private fun flushPhoto(): Boolean {
+        val p = pendingPhoto ?: return false
+        if (!host.supportsImage()) return false
+        val shown = host.renderImage(p.contentKey, "Foto", p.caption, p.jpeg, p.width, p.height)
+        if (!shown) return false
+        pendingPhoto = null
+        nav.enterImage() // the image surface is now on screen; do NOT re-render a card over it
+        return true
+    }
+
+    /** Called by the service on link-state changes so a pending photo flushes promptly. */
+    fun onLinkState(@Suppress("UNUSED_PARAMETER") state: Int) {
+        flushPhoto()
+    }
+
+    private fun playAudio(message: Message) {
+        val chat = nav.openChat ?: return
+        nav.showInfo("Audio", listOf("Carregando audio..."))
+        render()
+        scope.launch {
+            val svc = serviceFor(chat.boxId)
+            val bytes = withContext(Dispatchers.IO) {
+                runCatching { svc?.fetchMedia(chat.id, message) }.getOrNull()
+            }
+            if (bytes == null || bytes.isEmpty()) {
+                nav.showInfo("Audio", listOf("Audio indisponivel."))
+                render(); return@launch
+            }
+            val played = withContext(Dispatchers.IO) {
+                runCatching {
+                    val file = java.io.File.createTempFile("play", ".ogg", appContext.cacheDir)
+                    file.writeBytes(bytes)
+                    file
+                }
+            }.mapCatching { file -> withContext(Dispatchers.Main) { startPlayback(file) } }
+            if (played.isSuccess) {
+                nav.showInfo("Audio", listOf("Reproduzindo audio (sai pelo audio dos oculos quando conectados)."))
+            } else {
+                nav.showInfo("Audio", listOf("Falha ao reproduzir: ${played.exceptionOrNull()?.message?.take(160).orEmpty()}"))
+            }
+            render()
+        }
+    }
+
+    private fun startPlayback(file: java.io.File) {
+        runCatching { mediaPlayer?.release() }
+        mediaPlayer = android.media.MediaPlayer().apply {
+            setDataSource(file.absolutePath)
+            setOnCompletionListener { mp ->
+                runCatching { mp.release() }
+                if (mediaPlayer === mp) mediaPlayer = null
+                runCatching { file.delete() }
+            }
+            prepare()
+            start()
         }
     }
 
@@ -466,6 +557,7 @@ class InboxRuntime(
         private const val INITIAL_LIMIT = 20
         private const val SEARCH_LIMIT = 200
         private const val MAX_IMAGE_BYTES = 60 * 1024
+        private const val PHOTO_WAIT_MS = 12_000L
 
         fun glyph(kind: ChannelKind): String = when (kind) {
             ChannelKind.WHATSAPP -> "W"

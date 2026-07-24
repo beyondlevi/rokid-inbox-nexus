@@ -25,11 +25,13 @@ class InboxPluginService : NexusPluginService(), InboxRuntime.SurfaceHost {
     private val runtime by lazy { InboxRuntime(applicationContext, this) }
     private var surface: NexusSurfaceSession? = null
     private var audio: NexusAudioSession? = null
-    private var cardShown = false
+    // A surface (card OR image) has been shown this session: first send uses
+    // show*, every later send uses update* — including card<->image kind changes.
+    private var surfaceShown = false
 
     override fun onNexusOpen() {
         surface = nexusSurfaceSession(SURFACE_ID)
-        cardShown = false
+        surfaceShown = false
         runtime.open()
     }
 
@@ -39,7 +41,7 @@ class InboxPluginService : NexusPluginService(), InboxRuntime.SurfaceHost {
         audio = null
         surface?.hide()
         surface = null
-        cardShown = false
+        surfaceShown = false
     }
 
     override fun onNexusInput(event: NexusInputEvent) {
@@ -53,6 +55,11 @@ class InboxPluginService : NexusPluginService(), InboxRuntime.SurfaceHost {
         }
     }
 
+    /** SPP link state can bring the image surface up/down; let the runtime flush a pending photo. */
+    override fun onNexusLinkState(state: Int) {
+        runtime.onLinkState(state)
+    }
+
     /* ---------------- SurfaceHost ---------------- */
 
     override fun renderCard(screen: InboxNavState.Screen) {
@@ -64,9 +71,9 @@ class InboxPluginService : NexusPluginService(), InboxRuntime.SurfaceHost {
             contentKey = contentKey(screen.keySeed),
             handlesBack = true,
         )
-        val result = if (cardShown) s.updateCard(card) else s.showCard(card)
+        val result = if (surfaceShown) s.updateCard(card) else s.showCard(card)
         // SURFACE_BUSY: another plugin owns the HUD — give up quietly, no retry loop.
-        if (result == NexusSdkResult.SENT) cardShown = true
+        if (result == NexusSdkResult.SENT) surfaceShown = true
     }
 
     override fun renderImage(
@@ -89,13 +96,18 @@ class InboxPluginService : NexusPluginService(), InboxRuntime.SurfaceHost {
             footer = "duplo - voltar",
             handlesBack = true,
         )
-        val sent = s.showImage(image, jpeg) == NexusSdkResult.SENT
-        if (sent) cardShown = false
+        // First surface uses show; a card is usually already up, so transition via update.
+        val result = if (surfaceShown) s.updateImage(image, jpeg) else s.showImage(image, jpeg)
+        val sent = result == NexusSdkResult.SENT
+        if (sent) surfaceShown = true
         return sent
     }
 
+    override fun supportsImage(): Boolean = nexusClient?.supportsImageSurface == true
+
     override fun selfClose() {
         surface?.hide()
+        surfaceShown = false
     }
 
     override fun startMic(): InboxRuntime.MicStart {

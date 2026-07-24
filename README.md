@@ -26,7 +26,10 @@ surfaces the hub renders, driven by the R08 ring.
   transcribed; confirm the transcript and send. Reuses your OpenAI key.
 - **React** with emoji (WhatsApp / Telegram).
 - **View photos** on the HUD via the Nexus image surface (downscaled and
-  re-encoded on the phone to fit the surface limits).
+  re-encoded on the phone to fit the surface limits; waits for the SPP image
+  channel and falls back to text if it stays down).
+- **Play audio messages** — voice notes expose "Reproduzir audio", played
+  phone-side and routed to the glasses speaker when connected.
 - **Describe with AI** — open a photo or a file (pdf, xlsx, docx, csv, ...) and
   get a detailed text description on the HUD, generated on the phone with your
   own OpenAI key (Vision for images, the Files + Responses API with code

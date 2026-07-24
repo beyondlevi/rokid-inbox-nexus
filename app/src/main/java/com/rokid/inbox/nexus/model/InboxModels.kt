@@ -50,6 +50,8 @@ data class Message(
 ) {
     val isImageMedia: Boolean get() = media == "[photo]" || media == "[sticker]"
     val isDescribableFile: Boolean get() = media == "[file]"
+    /** Voice note / audio message that can be played back. */
+    val isPlayableAudio: Boolean get() = media == "[voice]" || media == "[audio]"
     /** Can an AI text description be requested for this message? */
     val canDescribe: Boolean get() = isImageMedia || isDescribableFile
 }

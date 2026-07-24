@@ -2,6 +2,22 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.2.2] - 2026-07-24
+
+### Fixed
+- Photos would not display on the HUD. The image surface needs the SPP binary
+  plane (`supportsImageSurface` = image capability AND `SPP_DATA_UP`), which can
+  be transiently down; the plugin now keeps the photo pending, waits for the
+  image channel to come up (retrying on link-state changes, up to 12 s) and only
+  then falls back to a text card — instead of giving up immediately. Images are
+  also sent via `updateImage` when a surface is already shown (card→image
+  transition), matching the shipped Feeds/Media Deck idiom.
+
+### Added
+- Play button for audio messages: voice/audio messages now expose **Reproduzir
+  audio**, which fetches the media and plays it phone-side (routing to the
+  glasses speaker when they are the connected audio output).
+
 ## [1.2.1] - 2026-07-24
 
 ### Fixed
