@@ -16,7 +16,7 @@ import com.rokid.inbox.nexus.model.QuickMessage
  */
 class InboxNavState {
 
-    enum class View { LIST, THREAD, MSG_ACTIONS, QUICK, REACT, LISTENING, REVIEW, SEARCH_RESULTS, INFO }
+    enum class View { LIST, THREAD, MSG_ACTIONS, QUICK, REACT, LISTENING, REVIEW, SEARCH_RESULTS, INFO, IMAGE }
     enum class Filter { ALL, UNREAD }
     enum class Tone { NORMAL, DIM, BODY, ALERT }
     enum class ListenPurpose { REPLY, SEARCH }
@@ -49,6 +49,7 @@ class InboxNavState {
         data object ReplyToChat : NavAction
         data class ReplyQuoting(val message: Message) : NavAction
         data class React(val message: Message) : NavAction
+        data class ViewPhoto(val message: Message) : NavAction
         data class Describe(val message: Message) : NavAction
         data class SendQuick(val quick: QuickMessage) : NavAction
         data class SendReaction(val message: Message, val emoji: String) : NavAction
@@ -197,6 +198,7 @@ class InboxNavState {
         View.MSG_ACTIONS -> {
             val m = selectedMessage ?: return NavAction.None
             when (messageActionRows().getOrNull(actionsIndex)) {
+                ROW_VIEW_PHOTO -> NavAction.ViewPhoto(m)
                 ROW_REACT -> NavAction.React(m)
                 ROW_DESCRIBE -> NavAction.Describe(m)
                 ROW_REPLY_QUOTE -> NavAction.ReplyQuoting(m)
@@ -219,10 +221,12 @@ class InboxNavState {
         }
         View.SEARCH_RESULTS -> searchResults.getOrNull(searchIndex)?.let { NavAction.OpenChat(it) } ?: NavAction.None
         View.LISTENING -> NavAction.StopListening
-        View.INFO -> NavAction.None
+        View.INFO, View.IMAGE -> NavAction.None
     }
 
     fun enterMessageActions(message: Message) { selectedMessage = message; actionsIndex = 0; view = View.MSG_ACTIONS }
+    /** The image surface is on screen; keep the view so BACK returns to the thread. */
+    fun enterImage() { statusLine = null; view = View.IMAGE }
     fun enterQuick(quoting: Message?) { this.quoting = quoting; quickIndex = 0; view = View.QUICK }
     fun enterReact(message: Message) { selectedMessage = message; reactIndex = 0; view = View.REACT }
 
@@ -259,6 +263,7 @@ class InboxNavState {
                 else -> View.THREAD
             }
             View.SEARCH_RESULTS -> view = View.LIST
+            View.IMAGE -> view = View.THREAD
             View.INFO -> view = if (openChat != null) View.THREAD else View.LIST
         }
         return false
@@ -281,6 +286,7 @@ class InboxNavState {
         View.REVIEW -> reviewScreen()
         View.SEARCH_RESULTS -> searchScreen()
         View.INFO -> infoScreen()
+        View.IMAGE -> Screen("Foto", null, listOf(Row(text = "Exibindo imagem...", tone = Tone.DIM)), "duplo volta", "image")
     }
 
     private fun listScreen(): Screen {
@@ -450,6 +456,7 @@ class InboxNavState {
     private fun messageActionRows(): List<String> {
         val m = selectedMessage ?: return emptyList()
         val rows = ArrayList<String>()
+        if (m.isImageMedia) rows += ROW_VIEW_PHOTO
         if (canReactOpen) rows += ROW_REACT
         if (m.canDescribe && aiConfigured) rows += ROW_DESCRIBE
         if (canSendOpen) rows += ROW_REPLY_QUOTE
@@ -476,7 +483,7 @@ class InboxNavState {
         View.REVIEW -> reviewChoices().size
         View.SEARCH_RESULTS -> searchResults.size
         View.INFO -> infoChunks().size
-        View.LISTENING -> 0
+        View.LISTENING, View.IMAGE -> 0
     }
 
     private fun index(): Int = when (view) {
@@ -488,7 +495,7 @@ class InboxNavState {
         View.REVIEW -> reviewIndex
         View.SEARCH_RESULTS -> searchIndex
         View.INFO -> infoIndex
-        View.LISTENING -> 0
+        View.LISTENING, View.IMAGE -> 0
     }
 
     private fun setIndex(v: Int) {
@@ -501,7 +508,7 @@ class InboxNavState {
             View.REVIEW -> reviewIndex = v
             View.SEARCH_RESULTS -> searchIndex = v
             View.INFO -> infoIndex = v
-            View.LISTENING -> {}
+            View.LISTENING, View.IMAGE -> {}
         }
     }
 
@@ -569,6 +576,7 @@ class InboxNavState {
         private const val THREAD_CHUNK_CHARS = 52
         private const val ROW_REPLY = "Responder"
         private const val ROW_LOAD_OLDER = "Carregar mais"
+        private const val ROW_VIEW_PHOTO = "Ver foto"
         private const val ROW_REACT = "Reagir"
         private const val ROW_DESCRIBE = "Descrever (IA)"
         private const val ROW_REPLY_QUOTE = "Responder citando"

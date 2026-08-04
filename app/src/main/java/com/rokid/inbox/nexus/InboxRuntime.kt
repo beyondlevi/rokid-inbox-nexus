@@ -35,6 +35,10 @@ class InboxRuntime(
         fun selfClose()
         fun startMic(): MicStart
         fun stopMic()
+        /** Whether the glasses image surface (SPP binary plane) is available now. */
+        fun supportsImage(): Boolean
+        /** @return true if the image was accepted by the hub. */
+        fun renderImage(contentKey: String, title: String, caption: String, jpeg: ByteArray, width: Int, height: Int): Boolean
     }
 
     enum class MicStart { SENT, NOT_GRANTED, NOT_READY, UNAVAILABLE }
@@ -55,12 +59,25 @@ class InboxRuntime(
     private var lastWav: ByteArray? = null
     private var lastDurationSec = 0
 
+    // Photo awaiting the image-surface (SPP) window.
+    private var pendingPhoto: PendingPhoto? = null
+
+    private data class PendingPhoto(
+        val contentKey: String,
+        val jpeg: ByteArray,
+        val width: Int,
+        val height: Int,
+        val caption: String,
+        val fallback: String,
+    )
+
     /* ---------------- lifecycle ---------------- */
 
     fun open() {
         scope.cancel()
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
         resetVoiceBuffers()
+        pendingPhoto = null
         val key = config.getOpenAiKey()
         ai = AiDescriber(key)
         stt = SpeechToText(key, config.getSttModel(), config.getSttLanguage())
@@ -77,7 +94,11 @@ class InboxRuntime(
     fun close() {
         scope.cancel()
         resetVoiceBuffers()
+        pendingPhoto = null
     }
+
+    /** Called by the service on link-state changes so a pending photo flushes promptly. */
+    fun onLinkState(@Suppress("UNUSED_PARAMETER") state: Int) { flushPhoto() }
 
     /* ---------------- input ---------------- */
 
@@ -108,6 +129,7 @@ class InboxRuntime(
             InboxNavState.NavAction.ReplyToChat -> { nav.enterQuick(null); render() }
             is InboxNavState.NavAction.ReplyQuoting -> { nav.enterQuick(action.message); render() }
             is InboxNavState.NavAction.React -> { nav.enterReact(action.message); render() }
+            is InboxNavState.NavAction.ViewPhoto -> viewPhoto(action.message)
             is InboxNavState.NavAction.Describe -> describe(action.message)
             is InboxNavState.NavAction.SendQuick -> sendText(action.quick.body, nav.quotingMessage())
             is InboxNavState.NavAction.SendReaction -> react(action.message, action.emoji)
@@ -226,6 +248,78 @@ class InboxRuntime(
         }
     }
 
+    /* ---------------- photo view (image surface) ---------------- */
+
+    private fun viewPhoto(message: Message) {
+        val chat = nav.openChat ?: return
+        nav.showInfo("Foto", listOf("Carregando foto..."))
+        render()
+        scope.launch {
+            val svc = serviceFor(chat.boxId)
+            val bytes = withContext(Dispatchers.IO) { runCatching { svc?.fetchMedia(chat.id, message) }.getOrNull() }
+            if (bytes == null || bytes.isEmpty()) { nav.showInfo("Foto", listOf("Imagem indisponivel.")); render(); return@launch }
+            val img = withContext(Dispatchers.Default) { preprocessImage(bytes) }
+            if (img == null) { nav.showInfo("Foto", listOf("Nao foi possivel decodificar a imagem.")); render(); return@launch }
+            pendingPhoto = PendingPhoto(
+                contentKey = "photo-${chat.boxId}-${message.id}",
+                jpeg = img.bytes, width = img.width, height = img.height,
+                caption = if (message.senderName.isNotBlank()) message.senderName else "",
+                fallback = message.text.ifBlank { message.senderName.ifBlank { "Foto" } }.take(160),
+            )
+            // The image surface needs the SPP binary plane, which can be transiently
+            // down; wait for it and retry rather than giving up (matches the shipped
+            // Feeds/Sample image path). Fall back to text only if it never comes up.
+            if (flushPhoto()) return@launch
+            nav.showInfo("Foto", listOf("Carregando foto (aguardando canal de imagem)..."))
+            render()
+            val deadline = android.os.SystemClock.elapsedRealtime() + PHOTO_WAIT_MS
+            while (pendingPhoto != null && android.os.SystemClock.elapsedRealtime() < deadline) {
+                kotlinx.coroutines.delay(700)
+                if (flushPhoto()) return@launch
+            }
+            pendingPhoto?.let {
+                pendingPhoto = null
+                nav.showInfo("Foto", listOf(it.fallback, "", "Canal de imagem inativo — nao consegui exibir. Tente com os oculos conectados e vestidos."))
+                render()
+            }
+        }
+    }
+
+    private fun flushPhoto(): Boolean {
+        val p = pendingPhoto ?: return false
+        if (!host.supportsImage()) return false
+        if (!host.renderImage(p.contentKey, "Foto", p.caption, p.jpeg, p.width, p.height)) return false
+        pendingPhoto = null
+        nav.enterImage() // image surface is on screen; do NOT re-render a card over it
+        return true
+    }
+
+    private data class Img(val bytes: ByteArray, val width: Int, val height: Int)
+
+    /** Decode, downscale to <= 512 px edges and JPEG-encode under 64 KiB for the image surface. */
+    private fun preprocessImage(bytes: ByteArray, maxDim: Int = 480, quality: Int = 80): Img? {
+        val src = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return null
+        val scale = minOf(1f, maxDim.toFloat() / maxOf(src.width, src.height))
+        val scaled = if (scale < 1f) {
+            android.graphics.Bitmap.createScaledBitmap(
+                src,
+                (src.width * scale).toInt().coerceAtLeast(1),
+                (src.height * scale).toInt().coerceAtLeast(1),
+                true,
+            )
+        } else src
+        var q = quality
+        var out = ByteArrayOutputStream()
+        scaled.compress(android.graphics.Bitmap.CompressFormat.JPEG, q, out)
+        while (out.size() > MAX_IMAGE_BYTES && q > 30) {
+            q -= 10
+            out = ByteArrayOutputStream()
+            scaled.compress(android.graphics.Bitmap.CompressFormat.JPEG, q, out)
+        }
+        if (out.size() > MAX_IMAGE_BYTES) return null
+        return Img(out.toByteArray(), scaled.width, scaled.height)
+    }
+
     /* ---------------- voice ---------------- */
 
     private fun startDictation(quoting: Message?) = beginListen { nav.enterListening(quoting) }
@@ -329,6 +423,8 @@ class InboxRuntime(
         private const val INITIAL_LIMIT = 20
         private const val SEARCH_LIMIT = 200
         private const val MIN_AUDIO_BYTES = 3_200
+        private const val MAX_IMAGE_BYTES = 60 * 1024
+        private const val PHOTO_WAIT_MS = 12_000L
 
         fun glyph(kind: ChannelKind): String = when (kind) {
             ChannelKind.WHATSAPP -> "W"; ChannelKind.TELEGRAM -> "T"; ChannelKind.GMAIL -> "E"; ChannelKind.GITHUB -> "PR"

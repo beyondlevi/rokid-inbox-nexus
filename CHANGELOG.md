@@ -2,6 +2,19 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.1.0] - 2026-08-04 (branch `relay-base`)
+
+### Added
+- Photo viewing on the HUD (based on the shipped Feeds/Sample image-surface
+  pattern). Image messages now offer **Ver foto**: the photo is fetched,
+  downscaled/re-encoded on the phone to fit the image-surface limits (≤512 px
+  edges, ≤64 KiB JPEG) and shown via `NexusImage`. Because the image surface
+  needs the SPP binary plane (`supportsImageSurface`), which can be transiently
+  down, it keeps the photo pending and retries until the channel comes up (up to
+  12 s, also flushed on link-state changes), falling back to a text card only if
+  it never does. BACK returns to the conversation. No new capability (image
+  surface rides the existing `surfaces` grant).
+
 ## [2.0.3] - 2026-08-04 (branch `relay-base`)
 
 ### Fixed

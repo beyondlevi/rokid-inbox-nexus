@@ -93,9 +93,23 @@ class InboxNavStateTest {
         openThread(s, chat("a"), listOf(photo))
         s.setAiConfigured(true)
         s.enterMessageActions(photo)
-        assertTrue(s.activate() is InboxNavState.NavAction.React)
+        // Image message: Ver foto, then Reagir, Descrever, Responder citando.
+        assertTrue(s.activate() is InboxNavState.NavAction.ViewPhoto)
+        s.move(1); assertTrue(s.activate() is InboxNavState.NavAction.React)
         s.move(1); assertTrue(s.activate() is InboxNavState.NavAction.Describe)
         s.move(1); assertTrue(s.activate() is InboxNavState.NavAction.ReplyQuoting)
+    }
+
+    @Test
+    fun `view photo returns to the thread on back`() {
+        val s = withInbox(chat("a"))
+        val photo = Message(id = "p1", media = "[photo]")
+        openThread(s, chat("a"), listOf(photo))
+        s.enterMessageActions(photo)
+        s.enterImage()
+        assertEquals(InboxNavState.View.IMAGE, s.view)
+        assertFalse(s.back())
+        assertEquals(InboxNavState.View.THREAD, s.view)
     }
 
     @Test

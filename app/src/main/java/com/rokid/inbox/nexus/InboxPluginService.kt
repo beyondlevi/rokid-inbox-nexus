@@ -7,10 +7,12 @@ import com.anezium.rokidbus.client.plugin.NexusAudioSession
 import com.anezium.rokidbus.client.plugin.NexusAudioStopReason
 import com.anezium.rokidbus.client.plugin.NexusCard
 import com.anezium.rokidbus.client.plugin.NexusCardLine
+import com.anezium.rokidbus.client.plugin.NexusImage
 import com.anezium.rokidbus.client.plugin.NexusPluginService
 import com.anezium.rokidbus.client.plugin.NexusRowTone
 import com.anezium.rokidbus.client.plugin.NexusSdkResult
 import com.anezium.rokidbus.client.plugin.NexusSurfaceSession
+import com.anezium.rokidbus.shared.ImageSurfaceContract
 import com.anezium.rokidbus.shared.plugin.NexusInputEvent
 import java.security.MessageDigest
 
@@ -53,6 +55,9 @@ class InboxPluginService : NexusPluginService(), InboxRuntime.SurfaceHost {
         }
     }
 
+    /** SPP link state can bring the image surface up/down; flush a pending photo. */
+    override fun onNexusLinkState(state: Int) = runtime.onLinkState(state)
+
     /* ---------------- SurfaceHost ---------------- */
 
     override fun render(screen: InboxNavState.Screen) {
@@ -82,6 +87,35 @@ class InboxPluginService : NexusPluginService(), InboxRuntime.SurfaceHost {
     override fun selfClose() {
         surface?.hide()
         surfaceShown = false
+    }
+
+    override fun supportsImage(): Boolean = nexusClient?.supportsImageSurface == true
+
+    override fun renderImage(
+        contentKey: String,
+        title: String,
+        caption: String,
+        jpeg: ByteArray,
+        width: Int,
+        height: Int,
+    ): Boolean {
+        val s = surface ?: return false
+        if (nexusClient?.supportsImageSurface != true) return false
+        val image = NexusImage(
+            contentKey = contentKey(contentKey),
+            mimeType = ImageSurfaceContract.MIME_JPEG,
+            pixelWidth = width,
+            pixelHeight = height,
+            title = title.take(120),
+            caption = caption.take(240),
+            footer = "duplo volta",
+            handlesBack = true,
+        )
+        // A card is usually already shown, so transition via updateImage.
+        val result = if (surfaceShown) s.updateImage(image, jpeg) else s.showImage(image, jpeg)
+        val sent = result == NexusSdkResult.SENT
+        if (sent) surfaceShown = true
+        return sent
     }
 
     override fun startMic(): InboxRuntime.MicStart {
