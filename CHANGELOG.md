@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.0.1] - 2026-08-04 (branch `relay-base`)
+
+### Fixed
+- No visual selection indicator on non-list rows. The hub only draws its
+  selection rail on list rows (title + `sub`); BODY-tone/prose rows got no
+  caret. The focused row now switches to `ALERT` tone (the same way the shipped
+  Relay marks its choices), so the inbox header actions (Filtro / Atualizar /
+  Buscar por voz), the thread messages, and the Responder / Carregar mais /
+  message-action / react rows all show which one is selected.
+- Outgoing messages showed the sender twice ("Eu" badge + "Eu:" text). The row
+  text is now just the message body; the speaker is carried only by the badge.
+
 ## [2.0.0] - 2026-07-24 (branch `relay-base`)
 
 Large refactor of the HUD, rebuilt on the shipped Relay plugin's model, keeping

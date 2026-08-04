@@ -260,7 +260,9 @@ class InboxNavState {
         val headers = listHeaders()
         val chats = visibleChats()
         val rows = ArrayList<Row>()
-        headers.forEachIndexed { i, h -> rows += Row(text = h, tone = Tone.BODY, selected = listIndex == i) }
+        headers.forEachIndexed { i, h ->
+            rows += Row(text = h, tone = if (listIndex == i) Tone.ALERT else Tone.NORMAL, selected = listIndex == i)
+        }
         chats.forEachIndexed { i, c ->
             val idx = i + headers.size
             rows += Row(
@@ -287,15 +289,17 @@ class InboxNavState {
         val rows = ArrayList<Row>()
         val soloVoice = messages.all { it.isOutgoing || it.senderName.isBlank() || it.senderName.equals(chat?.name?.trim(), true) }
         messages.forEachIndexed { i, m ->
+            val on = threadIndex == i
             rows += Row(
                 text = messageText(m),
                 badge = speakerBadge(m, soloVoice),
-                tone = Tone.BODY,
-                selected = threadIndex == i,
+                tone = if (on) Tone.ALERT else Tone.BODY,
+                selected = on,
             )
         }
         threadActionRows().forEachIndexed { i, a ->
-            rows += Row(text = a, tone = Tone.NORMAL, selected = threadIndex == messages.size + i)
+            val on = threadIndex == messages.size + i
+            rows += Row(text = a, tone = if (on) Tone.ALERT else Tone.NORMAL, selected = on)
         }
         if (messages.isEmpty() && threadActionRows().isEmpty()) rows += Row(text = "Sem mensagens.", tone = Tone.DIM)
         statusLine?.let { rows += Row(text = it, tone = Tone.DIM) }
@@ -310,8 +314,9 @@ class InboxNavState {
 
     private fun actionsScreen(): Screen {
         val m = selectedMessage
-        val rows = messageActionRows().mapIndexed { i, a -> Row(text = a, selected = actionsIndex == i) }
-            .ifEmpty { listOf(Row(text = "Sem acoes.", tone = Tone.DIM)) }
+        val rows = messageActionRows().mapIndexed { i, a ->
+            Row(text = a, tone = if (actionsIndex == i) Tone.ALERT else Tone.NORMAL, selected = actionsIndex == i)
+        }.ifEmpty { listOf(Row(text = "Sem acoes.", tone = Tone.DIM)) }
         return Screen(
             title = "Mensagem",
             subtitle = m?.let { messageText(it) }?.take(240),
@@ -324,10 +329,10 @@ class InboxNavState {
     private fun quickScreen(): Screen {
         val rows = ArrayList<Row>()
         val voice = quickHasVoiceRow()
-        if (voice) rows += Row(text = "Ditar por voz", tone = Tone.BODY, selected = quickIndex == 0)
+        if (voice) rows += Row(text = "Ditar por voz", tone = if (quickIndex == 0) Tone.ALERT else Tone.NORMAL, selected = quickIndex == 0)
         quickMessages.forEachIndexed { i, q ->
             val idx = i + if (voice) 1 else 0
-            rows += Row(text = q.title, sub = q.body, selected = quickIndex == idx)
+            rows += Row(text = q.title, sub = q.body, tone = if (quickIndex == idx) Tone.ALERT else Tone.NORMAL, selected = quickIndex == idx)
         }
         if (rows.isEmpty()) rows += Row(text = "Configure respostas rapidas no celular.", tone = Tone.DIM)
         statusLine?.let { rows += Row(text = it, tone = Tone.DIM) }
@@ -341,7 +346,9 @@ class InboxNavState {
     }
 
     private fun reactScreen(): Screen {
-        val rows = reactions.mapIndexed { i, r -> Row(text = "${r.first} ${r.second}", selected = reactIndex == i) }
+        val rows = reactions.mapIndexed { i, r ->
+            Row(text = "${r.first} ${r.second}", tone = if (reactIndex == i) Tone.ALERT else Tone.NORMAL, selected = reactIndex == i)
+        }
         val extra = statusLine?.let { listOf(Row(text = it, tone = Tone.DIM)) } ?: emptyList()
         return Screen("Reagir", null, rows + extra, "girar · toque reage · duplo volta", "react|${selectedMessage?.id}|$reactIndex|${statusLine ?: ""}")
     }
@@ -470,10 +477,10 @@ class InboxNavState {
 
     private fun chatTitle(c: Chat): String = c.name.ifBlank { "?" }.take(120)
 
-    private fun messageText(m: Message): String {
-        val body = m.text.ifBlank { mediaLabel(m) }.replace("\n", " ").trim()
-        return if (m.isOutgoing) "Eu: $body".take(240) else body.take(240)
-    }
+    // The sender is carried by the row badge ("Eu" / name), so the text is just
+    // the message body — prefixing "Eu:" here duplicated the speaker column.
+    private fun messageText(m: Message): String =
+        m.text.ifBlank { mediaLabel(m) }.replace("\n", " ").trim().take(240)
 
     private fun speakerBadge(m: Message, soloVoice: Boolean): String? = when {
         m.isOutgoing -> "Eu"
