@@ -206,7 +206,9 @@ class InboxRuntime(
     private fun describe(message: Message) {
         val chat = nav.openChat ?: return
         if (!ai.isConfigured) { nav.showInfo("Descrever (IA)", listOf("Configure a chave OpenAI no celular.")); render(); return }
-        nav.setStatus("Descrevendo com IA...")
+        // Switch to a processing screen right away: gives feedback and, since INFO
+        // has no actionable rows, stops repeated taps from firing another request.
+        nav.showInfo("Descricao (IA)", listOf("Processando com IA..."))
         render()
         scope.launch {
             val svc = serviceFor(chat.boxId)

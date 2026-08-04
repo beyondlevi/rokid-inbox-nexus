@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.0.3] - 2026-08-04 (branch `relay-base`)
+
+### Fixed
+- "Descrever com IA" gave no processing feedback (leading to repeated taps) and
+  its result couldn't be scrolled. Tapping now switches immediately to a
+  "Processando com IA..." screen (which also has no actionable row, so extra
+  taps don't fire another request), and the result view is now scrollable: the
+  description is chunked into selectable rows so rotating pages through it, with
+  an `i/N` position in the subtitle.
+
 ## [2.0.2] - 2026-08-04 (branch `relay-base`)
 
 ### Fixed

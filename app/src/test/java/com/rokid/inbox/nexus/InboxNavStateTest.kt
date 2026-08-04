@@ -192,6 +192,20 @@ class InboxNavStateTest {
     }
 
     @Test
+    fun `AI description is scrollable across selectable chunk rows`() {
+        val s = InboxNavState()
+        s.showInfo("Descricao (IA)", listOf("detalhe ".repeat(40).trim()))
+        assertEquals(InboxNavState.View.INFO, s.view)
+        val rows0 = s.screen().rows
+        assertTrue("expected chunked rows, got ${rows0.size}", rows0.size >= 3)
+        assertEquals(1, rows0.count { it.selected })
+        val before = rows0.indexOfFirst { it.selected }
+        s.move(1)
+        val after = s.screen().rows.indexOfFirst { it.selected }
+        assertEquals(before + 1, after) // rotating scrolls the description
+    }
+
+    @Test
     fun `reaction view sends the chosen emoji`() {
         val s = InboxNavState()
         val m = Message(id = "m9")

@@ -102,6 +102,7 @@ class InboxNavState {
     private var reactIndex = 0
     private var reviewIndex = 0
     private var searchIndex = 0
+    private var infoIndex = 0
 
     val reactions: List<Pair<String, String>> = listOf(
         "👍" to "Curtir", "❤️" to "Amei", "😂" to "Haha",
@@ -151,8 +152,12 @@ class InboxNavState {
     }
 
     fun showInfo(title: String, lines: List<String>) {
-        infoTitle = title; infoLines = lines; statusLine = null; view = View.INFO
+        infoTitle = title; infoLines = lines; infoIndex = 0; statusLine = null; view = View.INFO
     }
+
+    /** Info/description text as scrollable chunk rows (list rows cap at 3 lines). */
+    private fun infoChunks(): List<String> =
+        infoLines.flatMap { chunk(it.replace("\n", " ")) }.filter { it.isNotBlank() }.take(120).ifEmpty { listOf("") }
 
     fun showSearchResults(query: String, results: List<Chat>) {
         searchQuery = query; searchResults = results; searchIndex = 0; statusLine = null; view = View.SEARCH_RESULTS
@@ -415,13 +420,19 @@ class InboxNavState {
         return Screen("Busca: ${searchQuery.take(40)}", "${searchResults.size}", rows, "girar · toque abre · duplo volta", "search|$searchQuery|$searchIndex|${searchResults.size}")
     }
 
-    private fun infoScreen(): Screen = Screen(
-        title = infoTitle.ifBlank { "Info" },
-        subtitle = null,
-        rows = wrap(infoLines).map { Row(text = it, tone = Tone.BODY) },
-        footer = "duplo volta",
-        keySeed = "info|$infoTitle|${infoLines.size}",
-    )
+    private fun infoScreen(): Screen {
+        val chunks = infoChunks()
+        val rows = chunks.mapIndexed { i, c ->
+            Row(text = c, tone = if (infoIndex == i) Tone.ALERT else Tone.BODY, selected = infoIndex == i)
+        }
+        return Screen(
+            title = infoTitle.ifBlank { "Info" },
+            subtitle = if (chunks.size > 1) "${infoIndex + 1}/${chunks.size}" else null,
+            rows = rows,
+            footer = if (chunks.size > 1) "girar rola · duplo volta" else "duplo volta",
+            keySeed = "info|$infoTitle|${chunks.size}|$infoIndex",
+        )
+    }
 
     /* ---------------- rows / helpers ---------------- */
 
@@ -464,7 +475,8 @@ class InboxNavState {
         View.REACT -> reactions.size
         View.REVIEW -> reviewChoices().size
         View.SEARCH_RESULTS -> searchResults.size
-        View.LISTENING, View.INFO -> 0
+        View.INFO -> infoChunks().size
+        View.LISTENING -> 0
     }
 
     private fun index(): Int = when (view) {
@@ -475,7 +487,8 @@ class InboxNavState {
         View.REACT -> reactIndex
         View.REVIEW -> reviewIndex
         View.SEARCH_RESULTS -> searchIndex
-        View.LISTENING, View.INFO -> 0
+        View.INFO -> infoIndex
+        View.LISTENING -> 0
     }
 
     private fun setIndex(v: Int) {
@@ -487,7 +500,8 @@ class InboxNavState {
             View.REACT -> reactIndex = v
             View.REVIEW -> reviewIndex = v
             View.SEARCH_RESULTS -> searchIndex = v
-            View.LISTENING, View.INFO -> {}
+            View.INFO -> infoIndex = v
+            View.LISTENING -> {}
         }
     }
 
@@ -515,16 +529,6 @@ class InboxNavState {
         "[file]" -> "[arquivo${if (m.fileName.isNotBlank()) ": " + m.fileName else ""}]"
         "[location]" -> "[localizacao]"; "[contact]" -> "[contato]"; "[poll]" -> "[enquete]"
         else -> "[midia]"
-    }
-
-    private fun wrap(lines: List<String>, max: Int = 220): List<String> {
-        val out = ArrayList<String>()
-        for (raw in lines) for (piece in raw.replace("\r", "").split("\n")) {
-            var p = piece
-            while (p.length > max) { out += p.substring(0, max); p = p.substring(max) }
-            out += p
-        }
-        return out.take(64)
     }
 
     private fun floorMod(a: Int, b: Int) = ((a % b) + b) % b
