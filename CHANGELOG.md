@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.3.1] - 2026-08-04 (branch `relay-base`)
+
+### Fixed
+- The plugin showed **INVALID · RECEIVE_PREFIX_OUTSIDE_NAMESPACE** after 2.3.0.
+  It declared `/camera/snapshot` in RECEIVE_PREFIXES, but the camera snapshot
+  result/error are owner-scoped **direct replies** (`PathRules.isDirectReply`)
+  delivered without a declared prefix, and `/camera/snapshot` is broader than the
+  allowed `/camera/snapshot/result|error` (camera prefixes are matched
+  one-directionally), so validation rejected it. Removed the `/camera` receive
+  prefix; the `camera` capability alone enables the snapshot request and the
+  result comes back on its own.
+
 ## [2.3.0] - 2026-08-04 (branch `relay-base`)
 
 ### Added

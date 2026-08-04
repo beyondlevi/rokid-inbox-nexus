@@ -48,7 +48,10 @@
             <meta-data android:name="com.anezium.rokidbus.plugin.ICON_DRAWABLE" android:resource="@drawable/nexus_glyph_inbox" />
             <meta-data android:name="com.anezium.rokidbus.plugin.API_VERSION" android:value="3" />
             <meta-data android:name="com.anezium.rokidbus.plugin.CAPABILITIES" android:value="surfaces,microphone,camera" />
-            <meta-data android:name="com.anezium.rokidbus.plugin.RECEIVE_PREFIXES" android:value="/plugin/rokid-inbox,/system/plugin,/audio,/camera/snapshot" />
+            <!-- No /camera prefix: the snapshot result/error are owner-scoped direct
+                 replies (PathRules.isDirectReply) delivered without a declared prefix;
+                 declaring /camera/snapshot fails validation (RECEIVE_PREFIX_OUTSIDE_NAMESPACE). -->
+            <meta-data android:name="com.anezium.rokidbus.plugin.RECEIVE_PREFIXES" android:value="/plugin/rokid-inbox,/system/plugin,/audio" />
             <meta-data android:name="com.anezium.rokidbus.plugin.SETTINGS_ACTIVITY" android:value=".InboxSettingsActivity" />
             <meta-data android:name="com.anezium.rokidbus.plugin.LAUNCHABLE" android:value="true" />
         </service>
