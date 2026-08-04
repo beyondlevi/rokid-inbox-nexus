@@ -2,6 +2,19 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.0.2] - 2026-08-04 (branch `relay-base`)
+
+### Fixed
+- Long messages were truncated at 3 lines and the action menu showed only a
+  one-line preview. The hub caps a list row at 3 lines (`LIST_BODY_MAX_LINES`)
+  and a subtitle at 1 line, so:
+  - The conversation reader now splits each message into ~52-char chunks (word
+    aware), each a row the hub renders and scrolls, so any message reads in full
+    across rows. Every chunk maps back to its message: tapping any part opens
+    that message's actions.
+  - The message-action menu now renders the full message (chunked, above the
+    actions) instead of a truncated one-line subtitle.
+
 ## [2.0.1] - 2026-08-04 (branch `relay-base`)
 
 ### Fixed

@@ -167,6 +167,31 @@ class InboxNavStateTest {
     }
 
     @Test
+    fun `long message splits into several readable rows all mapping to it`() {
+        val s = withInbox(chat("a"))
+        val long = "palavra ".repeat(20).trim() // ~139 chars, well over one 3-line row
+        openThread(s, chat("a"), listOf(Message(id = "m1", text = long, senderName = "X")), canSend = false, canReact = false, canVoice = false)
+        val rows = s.screen().rows
+        assertTrue("expected several chunk rows, got ${rows.size}", rows.size >= 3)
+        val joined = rows.joinToString(" ") { it.text }
+        assertTrue(joined.contains("palavra palavra")) // full text preserved across chunks
+        assertEquals("m1", (s.activate() as InboxNavState.NavAction.OpenMessage).message.id)
+    }
+
+    @Test
+    fun `action menu renders the full message above the actions`() {
+        val s = withInbox(chat("a"))
+        val long = "linha ".repeat(30).trim()
+        val m = Message(id = "m1", text = long)
+        openThread(s, chat("a"), listOf(m))
+        s.enterMessageActions(m)
+        val rows = s.screen().rows
+        val body = rows.filter { it.tone == InboxNavState.Tone.BODY }
+        assertTrue("message should be chunked across body rows", body.size >= 3)
+        assertTrue(body.joinToString(" ") { it.text }.contains("linha linha"))
+    }
+
+    @Test
     fun `reaction view sends the chosen emoji`() {
         val s = InboxNavState()
         val m = Message(id = "m9")

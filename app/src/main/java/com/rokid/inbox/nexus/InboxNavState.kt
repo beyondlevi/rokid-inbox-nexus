@@ -69,6 +69,9 @@ class InboxNavState {
     var openChat: Chat? = null
         private set
     private var messages: List<Message> = emptyList()
+    // Thread rendered as chunk rows so a long message reads in full across rows
+    // (the hub caps a list row at 3 lines); every chunk maps back to its message.
+    private var threadEntries: List<ThreadEntry> = emptyList()
     private var atStart = true
     private var canSendOpen = false
     private var canReactOpen = false
@@ -125,8 +128,26 @@ class InboxNavState {
         canReactOpen = canReact
         canVoiceOpen = canVoice
         statusLine = null
+        rebuildThread()
         view = View.THREAD
-        threadIndex = (messages.size - 1).coerceAtLeast(0) // focus newest
+        // Focus the newest content (last message chunk); the hub scrolls to it.
+        threadIndex = threadEntries.indexOfLast { it is ThreadEntry.MsgChunk }.coerceAtLeast(0)
+    }
+
+    private fun rebuildThread() {
+        val soloVoice = messages.all {
+            it.isOutgoing || it.senderName.isBlank() || it.senderName.equals(openChat?.name?.trim(), true)
+        }
+        val list = ArrayList<ThreadEntry>()
+        messages.forEach { m ->
+            val chunks = chunk(messageText(m))
+            chunks.forEachIndexed { ci, c ->
+                list += ThreadEntry.MsgChunk(m, c, if (ci == 0) speakerBadge(m, soloVoice) else null)
+            }
+        }
+        if (canSendOpen) list += ThreadEntry.Action(ROW_REPLY)
+        if (!atStart) list += ThreadEntry.Action(ROW_LOAD_OLDER)
+        threadEntries = list
     }
 
     fun showInfo(title: String, lines: List<String>) {
@@ -159,13 +180,14 @@ class InboxNavState {
                 else -> NavAction.VoiceSearch
             } else visibleChats().getOrNull(listIndex - headers.size)?.let { NavAction.OpenChat(it) } ?: NavAction.None
         }
-        View.THREAD -> {
-            if (threadIndex < messages.size) NavAction.OpenMessage(messages[threadIndex])
-            else when (threadActionRows().getOrNull(threadIndex - messages.size)) {
+        View.THREAD -> when (val e = threadEntries.getOrNull(threadIndex)) {
+            is ThreadEntry.MsgChunk -> NavAction.OpenMessage(e.message)
+            is ThreadEntry.Action -> when (e.name) {
                 ROW_REPLY -> NavAction.ReplyToChat
                 ROW_LOAD_OLDER -> NavAction.LoadOlder
                 else -> NavAction.None
             }
+            null -> NavAction.None
         }
         View.MSG_ACTIONS -> {
             val m = selectedMessage ?: return NavAction.None
@@ -286,43 +308,48 @@ class InboxNavState {
 
     private fun threadScreen(): Screen {
         val chat = openChat
-        val rows = ArrayList<Row>()
-        val soloVoice = messages.all { it.isOutgoing || it.senderName.isBlank() || it.senderName.equals(chat?.name?.trim(), true) }
-        messages.forEachIndexed { i, m ->
+        val rows = threadEntries.mapIndexed { i, e ->
             val on = threadIndex == i
-            rows += Row(
-                text = messageText(m),
-                badge = speakerBadge(m, soloVoice),
-                tone = if (on) Tone.ALERT else Tone.BODY,
-                selected = on,
-            )
-        }
-        threadActionRows().forEachIndexed { i, a ->
-            val on = threadIndex == messages.size + i
-            rows += Row(text = a, tone = if (on) Tone.ALERT else Tone.NORMAL, selected = on)
-        }
-        if (messages.isEmpty() && threadActionRows().isEmpty()) rows += Row(text = "Sem mensagens.", tone = Tone.DIM)
+            when (e) {
+                is ThreadEntry.MsgChunk -> Row(
+                    text = e.text,
+                    badge = e.badge,
+                    tone = if (on) Tone.ALERT else Tone.BODY,
+                    selected = on,
+                )
+                is ThreadEntry.Action -> Row(text = e.name, tone = if (on) Tone.ALERT else Tone.NORMAL, selected = on)
+            }
+        }.toMutableList()
+        if (rows.isEmpty()) rows += Row(text = "Sem mensagens.", tone = Tone.DIM)
         statusLine?.let { rows += Row(text = it, tone = Tone.DIM) }
         return Screen(
             title = chat?.let { "${it.boxLabel} ${it.name}".trim() }?.take(120) ?: "Conversa",
             subtitle = null,
             rows = rows,
             footer = "girar · toque · duplo volta",
-            keySeed = "thread|${chat?.boxId}:${chat?.id}|$threadIndex|${messages.size}|${statusLine ?: ""}",
+            keySeed = "thread|${chat?.boxId}:${chat?.id}|$threadIndex|${threadEntries.size}|${statusLine ?: ""}",
         )
     }
 
     private fun actionsScreen(): Screen {
         val m = selectedMessage
-        val rows = messageActionRows().mapIndexed { i, a ->
-            Row(text = a, tone = if (actionsIndex == i) Tone.ALERT else Tone.NORMAL, selected = actionsIndex == i)
-        }.ifEmpty { listOf(Row(text = "Sem acoes.", tone = Tone.DIM)) }
+        val rows = ArrayList<Row>()
+        // Show the full message (chunked so nothing truncates) above the actions.
+        m?.let { chunk(messageText(it)).forEach { c -> rows += Row(text = c, tone = Tone.BODY) } }
+        val actions = messageActionRows()
+        if (actions.isEmpty()) {
+            rows += Row(text = "Sem acoes.", tone = Tone.DIM)
+        } else {
+            actions.forEachIndexed { i, a ->
+                rows += Row(text = a, tone = if (actionsIndex == i) Tone.ALERT else Tone.NORMAL, selected = actionsIndex == i)
+            }
+        }
         return Screen(
             title = "Mensagem",
-            subtitle = m?.let { messageText(it) }?.take(240),
+            subtitle = null,
             rows = rows,
             footer = "girar · toque · duplo volta",
-            keySeed = "acts|${m?.id}|$actionsIndex",
+            keySeed = "acts|${m?.id}|$actionsIndex|${messageActionRows().size}",
         )
     }
 
@@ -409,13 +436,6 @@ class InboxNavState {
         return h
     }
 
-    private fun threadActionRows(): List<String> {
-        val rows = ArrayList<String>()
-        if (canSendOpen) rows += ROW_REPLY
-        if (!atStart) rows += ROW_LOAD_OLDER
-        return rows
-    }
-
     private fun messageActionRows(): List<String> {
         val m = selectedMessage ?: return emptyList()
         val rows = ArrayList<String>()
@@ -438,7 +458,7 @@ class InboxNavState {
 
     private fun itemCount(): Int = when (view) {
         View.LIST -> listItemCount()
-        View.THREAD -> messages.size + threadActionRows().size
+        View.THREAD -> threadEntries.size
         View.MSG_ACTIONS -> messageActionRows().size
         View.QUICK -> quickMessages.size + if (quickHasVoiceRow()) 1 else 0
         View.REACT -> reactions.size
@@ -509,7 +529,40 @@ class InboxNavState {
 
     private fun floorMod(a: Int, b: Int) = ((a % b) + b) % b
 
+    /**
+     * Word-aware split so each piece fits a list row (the hub caps a list row at
+     * 3 lines and ellipsizes past that). Splitting a long message into pieces
+     * lets the whole thing read across rows, with the hub scrolling.
+     */
+    private fun chunk(text: String, max: Int = THREAD_CHUNK_CHARS): List<String> {
+        val out = ArrayList<String>()
+        val sb = StringBuilder()
+        for (word0 in text.split(" ")) {
+            var word = word0
+            while (word.length > max) {
+                if (sb.isNotEmpty()) { out += sb.toString(); sb.setLength(0) }
+                out += word.substring(0, max)
+                word = word.substring(max)
+            }
+            if (word.isEmpty()) continue
+            when {
+                sb.isEmpty() -> sb.append(word)
+                sb.length + 1 + word.length <= max -> sb.append(' ').append(word)
+                else -> { out += sb.toString(); sb.setLength(0); sb.append(word) }
+            }
+        }
+        if (sb.isNotEmpty()) out += sb.toString()
+        return out.ifEmpty { listOf("") }
+    }
+
+    /** A thread row: a chunk of a message (mapped back to it) or a trailing action. */
+    private sealed interface ThreadEntry {
+        data class MsgChunk(val message: Message, val text: String, val badge: String?) : ThreadEntry
+        data class Action(val name: String) : ThreadEntry
+    }
+
     companion object {
+        private const val THREAD_CHUNK_CHARS = 52
         private const val ROW_REPLY = "Responder"
         private const val ROW_LOAD_OLDER = "Carregar mais"
         private const val ROW_REACT = "Reagir"
