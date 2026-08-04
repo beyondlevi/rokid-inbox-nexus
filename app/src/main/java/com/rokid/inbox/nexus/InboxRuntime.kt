@@ -39,6 +39,8 @@ class InboxRuntime(
         fun supportsImage(): Boolean
         /** @return true if the image was accepted by the hub. */
         fun renderImage(contentKey: String, title: String, caption: String, jpeg: ByteArray, width: Int, height: Int): Boolean
+        /** Capture a still from the glasses camera; result arrives via onSnapshot*. */
+        fun startCapture(): MicStart
     }
 
     enum class MicStart { SENT, NOT_GRANTED, NOT_READY, UNAVAILABLE }
@@ -72,7 +74,12 @@ class InboxRuntime(
         val height: Int,
         val caption: String,
         val fallback: String,
+        val previewView: InboxNavState.View, // where to land once the image shows
     )
+
+    // A just-captured photo (full bytes) awaiting the user's send confirmation.
+    private var capturedPhoto: ByteArray? = null
+    private var captureQuoting: Message? = null
 
     /* ---------------- lifecycle ---------------- */
 
@@ -81,6 +88,8 @@ class InboxRuntime(
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
         resetVoiceBuffers()
         pendingPhoto = null
+        capturedPhoto = null
+        captureQuoting = null
         releasePlayer()
         val key = config.getOpenAiKey()
         ai = AiDescriber(key)
@@ -99,6 +108,8 @@ class InboxRuntime(
         scope.cancel()
         resetVoiceBuffers()
         pendingPhoto = null
+        capturedPhoto = null
+        captureQuoting = null
         releasePlayer()
     }
 
@@ -145,6 +156,8 @@ class InboxRuntime(
             is InboxNavState.NavAction.SendQuick -> sendText(action.quick.body, nav.quotingMessage())
             is InboxNavState.NavAction.SendReaction -> react(action.message, action.emoji)
             is InboxNavState.NavAction.Dictate -> startDictation(action.quoting)
+            is InboxNavState.NavAction.CapturePhoto -> startCapture(action.quoting)
+            InboxNavState.NavAction.SendPhoto -> sendPhoto()
             InboxNavState.NavAction.StopListening -> { nav.setStatus("Transcrevendo..."); render(); host.stopMic() }
             InboxNavState.NavAction.SendReplyText -> {
                 val text = nav.currentTranscript.trim()
@@ -181,7 +194,7 @@ class InboxRuntime(
             if (svc == null) { nav.showInfo("Erro", listOf("Canal nao conectado.")); render(); return@launch }
             val result = withContext(Dispatchers.IO) { runCatching { svc.listMessages(chat.id, limit) } }
             result.onSuccess { msgs ->
-                nav.setConversation(chat, msgs, msgs.size < limit, svc.canSend, svc.canReact, svc.canSendVoice)
+                nav.setConversation(chat, msgs, msgs.size < limit, svc.canSend, svc.canReact, svc.canSendVoice, svc.canSendImage)
                 render()
                 if (chat.unreadCount > 0) withContext(Dispatchers.IO) { runCatching { svc.markAsRead(chat.id, msgs) } }
             }.onFailure {
@@ -319,6 +332,7 @@ class InboxRuntime(
                 jpeg = img.bytes, width = img.width, height = img.height,
                 caption = if (message.senderName.isNotBlank()) message.senderName else "",
                 fallback = message.text.ifBlank { message.senderName.ifBlank { "Foto" } }.take(160),
+                previewView = InboxNavState.View.IMAGE,
             )
             // The image surface needs the SPP binary plane, which can be transiently
             // down; wait for it and retry rather than giving up (matches the shipped
@@ -344,8 +358,95 @@ class InboxRuntime(
         if (!host.supportsImage()) return false
         if (!host.renderImage(p.contentKey, "Foto", p.caption, p.jpeg, p.width, p.height)) return false
         pendingPhoto = null
-        nav.enterImage() // image surface is on screen; do NOT re-render a card over it
+        // Image surface is on screen; land on its view and do NOT re-render a card over it.
+        when (p.previewView) {
+            InboxNavState.View.PHOTO_PREVIEW -> nav.enterPhotoPreview()
+            else -> nav.enterImage()
+        }
         return true
+    }
+
+    /* ---------------- capture photo (glasses camera) ---------------- */
+
+    private fun startCapture(quoting: Message?) {
+        val chat = nav.openChat ?: return
+        val svc = serviceFor(chat.boxId)
+        if (svc == null || !svc.canSendImage) { nav.showInfo("Camera", listOf("Este canal nao aceita imagem.")); render(); return }
+        captureQuoting = quoting
+        capturedPhoto = null
+        pendingPhoto = null
+        nav.showInfo("Camera", listOf("Capturando foto..."))
+        render()
+        when (host.startCapture()) {
+            MicStart.SENT -> Unit // wait for onSnapshot / onSnapshotError
+            MicStart.NOT_GRANTED -> { nav.showInfo("Camera", listOf("Ative a camera para este plugin em Plugin access.")); render() }
+            MicStart.NOT_READY -> { nav.showInfo("Camera", listOf("Hub nao conectado. Tente de novo.")); render() }
+            MicStart.UNAVAILABLE -> { nav.showInfo("Camera", listOf("Camera indisponivel.")); render() }
+        }
+    }
+
+    /** Snapshot callbacks, forwarded by the service (main thread). */
+    fun onSnapshot(jpeg: ByteArray) {
+        capturedPhoto = jpeg
+        nav.enterPhotoPreview()
+        // Preview on the image surface (downscaled); the fallback confirm card
+        // shows meanwhile / if the SPP image channel never comes up.
+        scope.launch {
+            val img = withContext(Dispatchers.Default) { preprocessImage(jpeg) }
+            if (img == null) { render(); return@launch } // stay on the confirm card
+            pendingPhoto = PendingPhoto(
+                contentKey = "capture-${System.currentTimeMillis()}",
+                jpeg = img.bytes, width = img.width, height = img.height,
+                caption = "toque envia",
+                fallback = "Foto capturada",
+                previewView = InboxNavState.View.PHOTO_PREVIEW,
+            )
+            if (flushPhoto()) return@launch
+            render() // confirm card while waiting for the image channel
+            val deadline = android.os.SystemClock.elapsedRealtime() + PHOTO_WAIT_MS
+            while (pendingPhoto != null && nav.view == InboxNavState.View.PHOTO_PREVIEW &&
+                android.os.SystemClock.elapsedRealtime() < deadline
+            ) {
+                kotlinx.coroutines.delay(700)
+                if (flushPhoto()) return@launch
+            }
+            pendingPhoto = null
+        }
+    }
+
+    fun onSnapshotError(reason: String) {
+        capturedPhoto = null
+        nav.showInfo("Camera", listOf(snapshotErrorText(reason)))
+        render()
+    }
+
+    private fun sendPhoto() {
+        val chat = nav.openChat ?: return
+        val jpeg = capturedPhoto
+        if (jpeg == null) { nav.showInfo("Foto", listOf("Nenhuma foto capturada.")); render(); return }
+        pendingPhoto = null
+        nav.showInfo("Foto", listOf("Enviando foto..."))
+        render()
+        val quoting = captureQuoting
+        scope.launch {
+            val svc = serviceFor(chat.boxId)
+            if (svc == null || !svc.canSendImage) { nav.showInfo("Foto", listOf("Este canal nao aceita imagem.")); render(); return@launch }
+            val res = withContext(Dispatchers.IO) {
+                runCatching { svc.sendImage(chat.id, jpeg, "", quoting?.id.orEmpty(), quoting?.isOutgoing ?: false) }
+            }
+            capturedPhoto = null
+            nav.showInfo("Foto", listOf(if (res.isSuccess) "Foto enviada." else "Falha: ${res.exceptionOrNull()?.message?.take(160).orEmpty()}"))
+            render()
+        }
+    }
+
+    private fun snapshotErrorText(reason: String): String = when (reason) {
+        "BUSY" -> "Camera em uso por outro app."
+        "LINK_DOWN" -> "Sem conexao com os oculos."
+        "CAPTURE_FAILED" -> "Nao foi possivel capturar."
+        "TIMEOUT" -> "A camera demorou demais."
+        "CANCELLED" -> "Captura cancelada."
+        else -> "Falha na camera."
     }
 
     private data class Img(val bytes: ByteArray, val width: Int, val height: Int)

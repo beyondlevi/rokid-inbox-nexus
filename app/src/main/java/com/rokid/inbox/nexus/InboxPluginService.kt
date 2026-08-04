@@ -11,6 +11,9 @@ import com.anezium.rokidbus.client.plugin.NexusImage
 import com.anezium.rokidbus.client.plugin.NexusPluginService
 import com.anezium.rokidbus.client.plugin.NexusRowTone
 import com.anezium.rokidbus.client.plugin.NexusSdkResult
+import com.anezium.rokidbus.client.plugin.NexusSnapshotCallbacks
+import com.anezium.rokidbus.client.plugin.NexusSnapshotError
+import com.anezium.rokidbus.client.plugin.NexusSnapshotSession
 import com.anezium.rokidbus.client.plugin.NexusSurfaceSession
 import com.anezium.rokidbus.shared.ImageSurfaceContract
 import com.anezium.rokidbus.shared.plugin.NexusInputEvent
@@ -27,6 +30,7 @@ class InboxPluginService : NexusPluginService(), InboxRuntime.SurfaceHost {
     private val runtime by lazy { InboxRuntime(applicationContext, this) }
     private var surface: NexusSurfaceSession? = null
     private var audio: NexusAudioSession? = null
+    private var snapshot: NexusSnapshotSession? = null
     private var surfaceShown = false
 
     override fun onNexusOpen() {
@@ -39,6 +43,8 @@ class InboxPluginService : NexusPluginService(), InboxRuntime.SurfaceHost {
         runtime.close()
         audio?.stop()
         audio = null
+        snapshot?.cancel()
+        snapshot = null
         surface?.hide()
         surface = null
         surfaceShown = false
@@ -151,6 +157,27 @@ class InboxPluginService : NexusPluginService(), InboxRuntime.SurfaceHost {
 
     override fun stopMic() {
         audio?.stop()
+    }
+
+    override fun startCapture(): InboxRuntime.MicStart {
+        val session = nexusSnapshotSession(object : NexusSnapshotCallbacks {
+            override fun onSnapshotCaptured(jpeg: ByteArray) {
+                snapshot = null
+                runtime.onSnapshot(jpeg)
+            }
+
+            override fun onSnapshotError(error: NexusSnapshotError) {
+                snapshot = null
+                runtime.onSnapshotError(error.name)
+            }
+        }) ?: return InboxRuntime.MicStart.UNAVAILABLE
+        snapshot = session
+        return when (session.capture()) {
+            NexusSdkResult.SENT -> InboxRuntime.MicStart.SENT
+            NexusSdkResult.CAPABILITY_NOT_GRANTED -> InboxRuntime.MicStart.NOT_GRANTED
+            NexusSdkResult.NOT_REGISTERED -> InboxRuntime.MicStart.NOT_READY
+            else -> InboxRuntime.MicStart.UNAVAILABLE
+        }
     }
 
     private fun toneOf(tone: InboxNavState.Tone): NexusRowTone = when (tone) {

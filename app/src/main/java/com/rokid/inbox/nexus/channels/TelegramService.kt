@@ -25,6 +25,7 @@ class TelegramService(
     override val canSend = true
     override val canReact = true
     override val canSendVoice = true
+    override val canSendImage = true
 
     private val serverUrl = serverUrl.trimEnd('/')
     private val jsonType = "application/json".toMediaType()
@@ -111,6 +112,15 @@ class TelegramService(
             addProperty("chatId", chatId)
             addProperty("audioBase64", Base64.encodeToString(wav, Base64.NO_WRAP))
             addProperty("durationSec", durationSec)
+            if (replyToId.isNotBlank()) addProperty("replyToId", replyToId)
+        })
+    }
+
+    override suspend fun sendImage(chatId: String, jpeg: ByteArray, caption: String, replyToId: String, replyFromMe: Boolean) {
+        post("/sendImage", JsonObject().apply {
+            addProperty("chatId", chatId)
+            addProperty("imageBase64", Base64.encodeToString(jpeg, Base64.NO_WRAP))
+            if (caption.isNotBlank()) addProperty("caption", caption)
             if (replyToId.isNotBlank()) addProperty("replyToId", replyToId)
         })
     }

@@ -16,7 +16,7 @@ import com.rokid.inbox.nexus.model.QuickMessage
  */
 class InboxNavState {
 
-    enum class View { LIST, THREAD, MSG_ACTIONS, QUICK, REACT, LISTENING, REVIEW, SEARCH_RESULTS, INFO, IMAGE }
+    enum class View { LIST, THREAD, MSG_ACTIONS, QUICK, REACT, LISTENING, REVIEW, SEARCH_RESULTS, INFO, IMAGE, PHOTO_PREVIEW }
     enum class Filter { ALL, UNREAD }
     enum class Tone { NORMAL, DIM, BODY, ALERT }
     enum class ListenPurpose { REPLY, SEARCH }
@@ -58,6 +58,9 @@ class InboxNavState {
         data class SendQuick(val quick: QuickMessage) : NavAction
         data class SendReaction(val message: Message, val emoji: String) : NavAction
         data class Dictate(val quoting: Message?) : NavAction
+        /** Capture a photo with the glasses camera to send as a reply. */
+        data class CapturePhoto(val quoting: Message?) : NavAction
+        data object SendPhoto : NavAction
         data object StopListening : NavAction
         data object SendReplyText : NavAction
         data object SendReplyAudio : NavAction
@@ -81,6 +84,7 @@ class InboxNavState {
     private var canSendOpen = false
     private var canReactOpen = false
     private var canVoiceOpen = false
+    private var canImageOpen = false
     private var aiConfigured = false
     private var voiceEnabled = false
     private var quickMessages: List<QuickMessage> = emptyList()
@@ -126,13 +130,22 @@ class InboxNavState {
         clampIndex(listIndex, listItemCount()) { listIndex = it }
     }
 
-    fun setConversation(chat: Chat, msgs: List<Message>, atStart: Boolean, canSend: Boolean, canReact: Boolean, canVoice: Boolean) {
+    fun setConversation(
+        chat: Chat,
+        msgs: List<Message>,
+        atStart: Boolean,
+        canSend: Boolean,
+        canReact: Boolean,
+        canVoice: Boolean,
+        canImage: Boolean = false,
+    ) {
         openChat = chat
         messages = msgs
         this.atStart = atStart
         canSendOpen = canSend
         canReactOpen = canReact
         canVoiceOpen = canVoice
+        canImageOpen = canImage
         statusLine = null
         rebuildThread()
         view = View.THREAD
@@ -219,9 +232,12 @@ class InboxNavState {
             }
         }
         View.QUICK -> {
-            val voice = quickHasVoiceRow()
-            if (voice && quickIndex == 0) NavAction.Dictate(quoting)
-            else quickMessages.getOrNull(quickIndex - if (voice) 1 else 0)?.let { NavAction.SendQuick(it) } ?: NavAction.None
+            val extras = quickExtras()
+            if (quickIndex < extras.size) when (extras[quickIndex]) {
+                ROW_DICTATE_VOICE -> NavAction.Dictate(quoting)
+                ROW_TAKE_PHOTO -> NavAction.CapturePhoto(quoting)
+                else -> NavAction.None
+            } else quickMessages.getOrNull(quickIndex - extras.size)?.let { NavAction.SendQuick(it) } ?: NavAction.None
         }
         View.REACT -> selectedMessage?.let { m ->
             reactions.getOrNull(reactIndex)?.let { NavAction.SendReaction(m, it.first) }
@@ -234,12 +250,15 @@ class InboxNavState {
         }
         View.SEARCH_RESULTS -> searchResults.getOrNull(searchIndex)?.let { NavAction.OpenChat(it) } ?: NavAction.None
         View.LISTENING -> NavAction.StopListening
+        View.PHOTO_PREVIEW -> NavAction.SendPhoto
         View.INFO, View.IMAGE -> NavAction.None
     }
 
     fun enterMessageActions(message: Message) { selectedMessage = message; actionsIndex = 0; view = View.MSG_ACTIONS }
     /** The image surface is on screen; keep the view so BACK returns to the thread. */
     fun enterImage() { statusLine = null; view = View.IMAGE }
+    /** A freshly captured photo awaiting send confirmation (shown on the image surface). */
+    fun enterPhotoPreview() { statusLine = null; view = View.PHOTO_PREVIEW }
     fun enterQuick(quoting: Message?) { this.quoting = quoting; quickIndex = 0; view = View.QUICK }
     fun enterReact(message: Message) { selectedMessage = message; reactIndex = 0; view = View.REACT }
 
@@ -277,6 +296,7 @@ class InboxNavState {
             }
             View.SEARCH_RESULTS -> view = View.LIST
             View.IMAGE -> view = View.THREAD
+            View.PHOTO_PREVIEW -> view = View.QUICK // discard the capture, back to the reply picker
             View.INFO -> view = if (openChat != null) View.THREAD else View.LIST
         }
         return false
@@ -300,6 +320,13 @@ class InboxNavState {
         View.SEARCH_RESULTS -> searchScreen()
         View.INFO -> infoScreen()
         View.IMAGE -> Screen("Foto", null, listOf(Row(text = "Exibindo imagem...", tone = Tone.DIM)), "duplo volta", "image")
+        View.PHOTO_PREVIEW -> Screen(
+            title = "Foto capturada",
+            subtitle = null,
+            rows = listOf(Row(text = "Enviar", tone = Tone.ALERT, selected = true)),
+            footer = "toque envia · duplo descarta",
+            keySeed = "photo|${statusLine ?: ""}",
+        )
     }
 
     private fun listScreen(): Screen {
@@ -379,10 +406,12 @@ class InboxNavState {
 
     private fun quickScreen(): Screen {
         val rows = ArrayList<Row>()
-        val voice = quickHasVoiceRow()
-        if (voice) rows += Row(text = "Ditar por voz", tone = if (quickIndex == 0) Tone.ALERT else Tone.NORMAL, selected = quickIndex == 0)
+        val extras = quickExtras()
+        extras.forEachIndexed { i, e ->
+            rows += Row(text = e, tone = if (quickIndex == i) Tone.ALERT else Tone.NORMAL, selected = quickIndex == i)
+        }
         quickMessages.forEachIndexed { i, q ->
-            val idx = i + if (voice) 1 else 0
+            val idx = i + extras.size
             rows += Row(text = q.title, sub = q.body, tone = if (quickIndex == idx) Tone.ALERT else Tone.NORMAL, selected = quickIndex == idx)
         }
         if (rows.isEmpty()) rows += Row(text = "Configure respostas rapidas no celular.", tone = Tone.DIM)
@@ -477,7 +506,13 @@ class InboxNavState {
         return rows
     }
 
-    private fun quickHasVoiceRow(): Boolean = voiceEnabled && canSendOpen
+    /** Non-canned reply options shown above the quick messages, in order. */
+    private fun quickExtras(): List<String> {
+        val e = ArrayList<String>()
+        if (voiceEnabled && canSendOpen) e += ROW_DICTATE_VOICE
+        if (canSendOpen && canImageOpen) e += ROW_TAKE_PHOTO
+        return e
+    }
     private fun reviewChoices(): List<String> {
         val c = ArrayList<String>()
         if (transcript.isNotBlank()) c += CHOICE_SEND_TEXT
@@ -492,12 +527,12 @@ class InboxNavState {
         View.LIST -> listItemCount()
         View.THREAD -> threadEntries.size
         View.MSG_ACTIONS -> messageActionRows().size
-        View.QUICK -> quickMessages.size + if (quickHasVoiceRow()) 1 else 0
+        View.QUICK -> quickExtras().size + quickMessages.size
         View.REACT -> reactions.size
         View.REVIEW -> reviewChoices().size
         View.SEARCH_RESULTS -> searchResults.size
         View.INFO -> infoPages().size
-        View.LISTENING, View.IMAGE -> 0
+        View.LISTENING, View.IMAGE, View.PHOTO_PREVIEW -> 0
     }
 
     private fun index(): Int = when (view) {
@@ -509,7 +544,7 @@ class InboxNavState {
         View.REVIEW -> reviewIndex
         View.SEARCH_RESULTS -> searchIndex
         View.INFO -> infoIndex
-        View.LISTENING, View.IMAGE -> 0
+        View.LISTENING, View.IMAGE, View.PHOTO_PREVIEW -> 0
     }
 
     private fun setIndex(v: Int) {
@@ -522,7 +557,7 @@ class InboxNavState {
             View.REVIEW -> reviewIndex = v
             View.SEARCH_RESULTS -> searchIndex = v
             View.INFO -> infoIndex = v
-            View.LISTENING, View.IMAGE -> {}
+            View.LISTENING, View.IMAGE, View.PHOTO_PREVIEW -> {}
         }
     }
 
@@ -592,6 +627,8 @@ class InboxNavState {
         // ~27 cols) and pack a page under the body's ~15-line cap.
         private const val INFO_WRAP_CHARS = 22
         private const val INFO_LINES_PER_PAGE = 12
+        private const val ROW_DICTATE_VOICE = "Ditar por voz"
+        private const val ROW_TAKE_PHOTO = "Tirar foto"
         private const val ROW_REPLY = "Responder"
         private const val ROW_LOAD_OLDER = "Carregar mais"
         private const val ROW_VIEW_PHOTO = "Ver foto"

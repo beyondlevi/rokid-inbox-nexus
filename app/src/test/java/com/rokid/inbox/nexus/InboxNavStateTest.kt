@@ -24,7 +24,8 @@ class InboxNavStateTest {
         canSend: Boolean = true,
         canReact: Boolean = true,
         canVoice: Boolean = true,
-    ) = s.setConversation(c, msgs, atStart = true, canSend = canSend, canReact = canReact, canVoice = canVoice)
+        canImage: Boolean = false,
+    ) = s.setConversation(c, msgs, atStart = true, canSend = canSend, canReact = canReact, canVoice = canVoice, canImage = canImage)
 
     @Test
     fun `list headers precede chats and map to the right action`() {
@@ -243,6 +244,43 @@ class InboxNavStateTest {
         openThread(s, chat("a"), listOf(voice), canReact = false) // aiConfigured stays false
         s.enterMessageActions(voice)
         assertTrue(s.activate() is InboxNavState.NavAction.PlayAudio) // no Transcrever row
+    }
+
+    @Test
+    fun `reply picker offers take photo on channels that can send images`() {
+        val s = withInbox(chat("a"))
+        s.setVoiceEnabled(false)
+        s.setQuickMessages(listOf(QuickMessage("Oi", "Ola!")))
+        openThread(s, chat("a"), listOf(Message(id = "m1")), canImage = true)
+        s.enterQuick(null)
+        // extras: [Tirar foto] (voice off), then the quick message.
+        assertTrue(s.activate() is InboxNavState.NavAction.CapturePhoto)
+        s.move(1)
+        assertTrue(s.activate() is InboxNavState.NavAction.SendQuick)
+    }
+
+    @Test
+    fun `photo preview sends on tap and discards on back to the picker`() {
+        val s = withInbox(chat("a"))
+        openThread(s, chat("a"), listOf(Message(id = "m1")), canImage = true)
+        s.enterQuick(null)
+        s.enterPhotoPreview()
+        assertEquals(InboxNavState.View.PHOTO_PREVIEW, s.view)
+        assertTrue(s.activate() is InboxNavState.NavAction.SendPhoto) // tap = send
+        assertFalse(s.back())
+        assertEquals(InboxNavState.View.QUICK, s.view) // back discards, returns to picker
+    }
+
+    @Test
+    fun `read-only channel never offers take photo`() {
+        val s = withInbox(chat("a"))
+        openThread(s, chat("a"), listOf(Message(id = "m1")), canSend = false, canImage = false)
+        // canSend false -> no reply picker path; messageActionRows has no photo either.
+        s.enterMessageActions(Message(id = "m1"))
+        repeat(4) {
+            assertTrue(s.activate() !is InboxNavState.NavAction.CapturePhoto)
+            s.move(1)
+        }
     }
 
     @Test

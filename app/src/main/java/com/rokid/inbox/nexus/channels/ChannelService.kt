@@ -19,6 +19,8 @@ interface ChannelService {
     val canReact: Boolean get() = false
     /** Whether an original voice note can be sent (WhatsApp, Telegram). */
     val canSendVoice: Boolean get() = false
+    /** Whether an image can be sent (WhatsApp, Telegram). */
+    val canSendImage: Boolean get() = false
 
     /** Messages are returned oldest-first (chronological, oldest at top). */
     suspend fun listChats(limit: Int = 20): List<Chat>
@@ -30,6 +32,11 @@ interface ChannelService {
     /** Send an original voice note (16 kHz mono PCM WAV). Only WhatsApp/Telegram support it. */
     suspend fun sendVoice(chatId: String, wav: ByteArray, durationSec: Int, replyToId: String = "", replyFromMe: Boolean = false) {
         throw UnsupportedOperationException("Voice notes not supported")
+    }
+
+    /** Send a JPEG image. Only WhatsApp/Telegram support it. */
+    suspend fun sendImage(chatId: String, jpeg: ByteArray, caption: String = "", replyToId: String = "", replyFromMe: Boolean = false) {
+        throw UnsupportedOperationException("Images not supported")
     }
     suspend fun sendReaction(chatId: String, messageId: String, emoji: String, fromMe: Boolean) {
         throw UnsupportedOperationException("Reactions not supported")

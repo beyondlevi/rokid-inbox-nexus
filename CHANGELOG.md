@@ -2,6 +2,25 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.3.0] - 2026-08-04 (branch `relay-base`)
+
+### Added
+- Capture a photo with the glasses camera and send it as a reply. In the reply
+  picker a **Tirar foto** option (shown on channels that can send images —
+  WhatsApp/Telegram) captures a still via the Nexus camera (`NexusSnapshotSession`,
+  new `camera` capability + `/camera/snapshot` receive prefix). The captured
+  photo previews on the image surface (waiting for the SPP channel, with a
+  confirm-card fallback); tap sends, double-tap discards. Sent via the channel:
+  WhatsApp `/message/sendMedia`, Telegram bridge `/sendImage`. Gmail/GitHub are
+  read-only, so they never offer it.
+
+### Note
+- Adding the `camera` capability changes the capability set, so the grant resets
+  to **Pending** — re-approve (now including camera) in Plugin access.
+- The Telegram voice-note/image sends need matching routes on your self-hosted
+  GramJS bridge (`/sendImage` with `{ chatId, imageBase64, caption?, replyToId? }`);
+  add it there. WhatsApp uses the standard Evolution API.
+
 ## [2.2.0] - 2026-08-04 (branch `relay-base`)
 
 ### Added
