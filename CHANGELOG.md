@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.1.1] - 2026-08-04 (branch `relay-base`)
+
+### Changed
+- AI description reader is now a dense **paged** view instead of many short
+  2-line chunk rows. The description renders as a plain card body (which packs
+  ~15 lines) filled to ~12 lines per page; rotating goes to the next/previous
+  page, with `pagina i/N` in the subtitle. Added a `bodyLines` plain-body path
+  to the surface renderer for this.
+
 ## [2.1.0] - 2026-08-04 (branch `relay-base`)
 
 ### Added

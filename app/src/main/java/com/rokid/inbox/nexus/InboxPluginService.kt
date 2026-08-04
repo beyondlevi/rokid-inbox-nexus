@@ -62,24 +62,37 @@ class InboxPluginService : NexusPluginService(), InboxRuntime.SurfaceHost {
 
     override fun render(screen: InboxNavState.Screen) {
         val s = surface ?: return
-        val rows = screen.rows.take(64).map { row ->
-            NexusCardLine(
-                text = row.text.take(240),
-                sub = row.sub?.take(240),
-                badge = row.badge?.take(24),
-                tone = toneOf(row.tone),
-                selected = row.selected,
+        val body = screen.bodyLines
+        val card = if (body != null) {
+            // Dense plain card body (the hub packs ~15 lines) for the paged reader.
+            NexusCard(
+                title = screen.title.take(120).ifBlank { "Inbox" },
+                lines = body.map { it.take(240) }.take(64).ifEmpty { listOf(" ") },
+                subtitle = screen.subtitle?.take(240),
+                footer = screen.footer.take(240),
+                contentKey = contentKey(screen.keySeed),
+                handlesBack = true,
+            )
+        } else {
+            val rows = screen.rows.take(64).map { row ->
+                NexusCardLine(
+                    text = row.text.take(240),
+                    sub = row.sub?.take(240),
+                    badge = row.badge?.take(24),
+                    tone = toneOf(row.tone),
+                    selected = row.selected,
+                )
+            }
+            NexusCard(
+                title = screen.title.take(120).ifBlank { "Inbox" },
+                lines = emptyList(),
+                subtitle = screen.subtitle?.take(240),
+                footer = screen.footer.take(240),
+                contentKey = contentKey(screen.keySeed),
+                richLines = rows.ifEmpty { listOf(NexusCardLine(text = " ")) },
+                handlesBack = true,
             )
         }
-        val card = NexusCard(
-            title = screen.title.take(120).ifBlank { "Inbox" },
-            lines = emptyList(),
-            subtitle = screen.subtitle?.take(240),
-            footer = screen.footer.take(240),
-            contentKey = contentKey(screen.keySeed),
-            richLines = rows.ifEmpty { listOf(NexusCardLine(text = " ")) },
-            handlesBack = true,
-        )
         val result = if (surfaceShown) s.updateCard(card) else s.showCard(card)
         if (result == NexusSdkResult.SENT) surfaceShown = true
     }

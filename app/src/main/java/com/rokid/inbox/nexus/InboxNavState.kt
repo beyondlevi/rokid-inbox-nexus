@@ -36,6 +36,9 @@ class InboxNavState {
         val rows: List<Row>,
         val footer: String,
         val keySeed: String,
+        /** When set, render as a dense plain card body (up to 15 lines) instead of
+         *  rich rows — used by the paged reader (AI description). */
+        val bodyLines: List<String>? = null,
     )
 
     sealed interface NavAction {
@@ -156,9 +159,17 @@ class InboxNavState {
         infoTitle = title; infoLines = lines; infoIndex = 0; statusLine = null; view = View.INFO
     }
 
-    /** Info/description text as scrollable chunk rows (list rows cap at 3 lines). */
-    private fun infoChunks(): List<String> =
-        infoLines.flatMap { chunk(it.replace("\n", " ")) }.filter { it.isNotBlank() }.take(120).ifEmpty { listOf("") }
+    /**
+     * Info/description paged for a dense plain-body reader: the whole text is
+     * word-wrapped into narrow lines and grouped into pages that fill the card
+     * body (which packs up to ~15 lines). Rotating pages; no per-line caret.
+     */
+    private fun infoPages(): List<List<String>> {
+        val flat = infoLines.flatMap { chunk(it.replace("\n", " "), INFO_WRAP_CHARS) }
+            .filter { it.isNotBlank() }
+            .ifEmpty { listOf("") }
+        return flat.chunked(INFO_LINES_PER_PAGE)
+    }
 
     fun showSearchResults(query: String, results: List<Chat>) {
         searchQuery = query; searchResults = results; searchIndex = 0; statusLine = null; view = View.SEARCH_RESULTS
@@ -427,16 +438,15 @@ class InboxNavState {
     }
 
     private fun infoScreen(): Screen {
-        val chunks = infoChunks()
-        val rows = chunks.mapIndexed { i, c ->
-            Row(text = c, tone = if (infoIndex == i) Tone.ALERT else Tone.BODY, selected = infoIndex == i)
-        }
+        val pages = infoPages()
+        val page = pages.getOrElse(infoIndex) { pages.first() }
         return Screen(
             title = infoTitle.ifBlank { "Info" },
-            subtitle = if (chunks.size > 1) "${infoIndex + 1}/${chunks.size}" else null,
-            rows = rows,
-            footer = if (chunks.size > 1) "girar rola · duplo volta" else "duplo volta",
-            keySeed = "info|$infoTitle|${chunks.size}|$infoIndex",
+            subtitle = if (pages.size > 1) "pagina ${infoIndex + 1}/${pages.size}" else null,
+            rows = emptyList(),
+            footer = if (pages.size > 1) "girar pagina · duplo volta" else "duplo volta",
+            keySeed = "info|$infoTitle|${pages.size}|$infoIndex",
+            bodyLines = page,
         )
     }
 
@@ -482,7 +492,7 @@ class InboxNavState {
         View.REACT -> reactions.size
         View.REVIEW -> reviewChoices().size
         View.SEARCH_RESULTS -> searchResults.size
-        View.INFO -> infoChunks().size
+        View.INFO -> infoPages().size
         View.LISTENING, View.IMAGE -> 0
     }
 
@@ -574,6 +584,10 @@ class InboxNavState {
 
     companion object {
         private const val THREAD_CHUNK_CHARS = 52
+        // Dense reader for the AI description: wrap narrow (<= plain-body width
+        // ~27 cols) and pack a page under the body's ~15-line cap.
+        private const val INFO_WRAP_CHARS = 22
+        private const val INFO_LINES_PER_PAGE = 12
         private const val ROW_REPLY = "Responder"
         private const val ROW_LOAD_OLDER = "Carregar mais"
         private const val ROW_VIEW_PHOTO = "Ver foto"

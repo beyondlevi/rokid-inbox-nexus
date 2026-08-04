@@ -206,17 +206,19 @@ class InboxNavStateTest {
     }
 
     @Test
-    fun `AI description is scrollable across selectable chunk rows`() {
+    fun `AI description pages a long text into dense plain-body pages`() {
         val s = InboxNavState()
-        s.showInfo("Descricao (IA)", listOf("detalhe ".repeat(40).trim()))
+        s.showInfo("Descricao (IA)", listOf((1..120).joinToString(" ") { "tok$it" }))
         assertEquals(InboxNavState.View.INFO, s.view)
-        val rows0 = s.screen().rows
-        assertTrue("expected chunked rows, got ${rows0.size}", rows0.size >= 3)
-        assertEquals(1, rows0.count { it.selected })
-        val before = rows0.indexOfFirst { it.selected }
+        val p0 = s.screen()
+        assertTrue("plain body, not rich rows", p0.rows.isEmpty())
+        assertTrue("has body lines", p0.bodyLines != null && p0.bodyLines!!.isNotEmpty())
+        assertTrue("page fits the line budget", p0.bodyLines!!.size <= 12)
+        assertTrue("shows page position", p0.subtitle!!.contains("pagina 1/"))
         s.move(1)
-        val after = s.screen().rows.indexOfFirst { it.selected }
-        assertEquals(before + 1, after) // rotating scrolls the description
+        val p1 = s.screen()
+        assertTrue("rotates to next page", p1.subtitle!!.contains("pagina 2/"))
+        assertTrue("next page has different content", p0.bodyLines != p1.bodyLines)
     }
 
     @Test
