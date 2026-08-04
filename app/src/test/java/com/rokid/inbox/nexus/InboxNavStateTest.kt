@@ -93,10 +93,10 @@ class InboxNavStateTest {
         openThread(s, chat("a"), listOf(photo))
         s.setAiConfigured(true)
         s.enterMessageActions(photo)
-        // Image message: Ver foto, then Reagir, Descrever, Responder citando.
+        // Image message: media actions first (Ver foto, Descrever), then Reagir, Responder citando.
         assertTrue(s.activate() is InboxNavState.NavAction.ViewPhoto)
-        s.move(1); assertTrue(s.activate() is InboxNavState.NavAction.React)
         s.move(1); assertTrue(s.activate() is InboxNavState.NavAction.Describe)
+        s.move(1); assertTrue(s.activate() is InboxNavState.NavAction.React)
         s.move(1); assertTrue(s.activate() is InboxNavState.NavAction.ReplyQuoting)
     }
 
@@ -219,6 +219,30 @@ class InboxNavStateTest {
         val p1 = s.screen()
         assertTrue("rotates to next page", p1.subtitle!!.contains("pagina 2/"))
         assertTrue("next page has different content", p0.bodyLines != p1.bodyLines)
+    }
+
+    @Test
+    fun `voice message offers playback then AI transcription`() {
+        val s = withInbox(chat("a"))
+        val voice = Message(id = "v1", media = "[voice]", senderName = "X")
+        openThread(s, chat("a"), listOf(voice))
+        s.setAiConfigured(true)
+        s.enterMessageActions(voice)
+        // Order: Reproduzir audio, Transcrever (IA), Reagir, Responder citando.
+        assertTrue(s.activate() is InboxNavState.NavAction.PlayAudio)
+        s.move(1)
+        val t = s.activate()
+        assertTrue(t is InboxNavState.NavAction.Describe)
+        assertEquals("v1", (t as InboxNavState.NavAction.Describe).message.id)
+    }
+
+    @Test
+    fun `voice message offers playback even without an AI key`() {
+        val s = withInbox(chat("a"))
+        val voice = Message(id = "v1", media = "[audio]")
+        openThread(s, chat("a"), listOf(voice), canReact = false) // aiConfigured stays false
+        s.enterMessageActions(voice)
+        assertTrue(s.activate() is InboxNavState.NavAction.PlayAudio) // no Transcrever row
     }
 
     @Test

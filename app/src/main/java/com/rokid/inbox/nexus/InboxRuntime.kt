@@ -61,6 +61,9 @@ class InboxRuntime(
 
     // Photo awaiting the image-surface (SPP) window.
     private var pendingPhoto: PendingPhoto? = null
+    // Plays a fetched voice note on the phone; the sound comes out on the glasses
+    // (they are the phone's Bluetooth audio sink — same route the Nexus TTS uses).
+    private var mediaPlayer: android.media.MediaPlayer? = null
 
     private data class PendingPhoto(
         val contentKey: String,
@@ -78,6 +81,7 @@ class InboxRuntime(
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
         resetVoiceBuffers()
         pendingPhoto = null
+        releasePlayer()
         val key = config.getOpenAiKey()
         ai = AiDescriber(key)
         stt = SpeechToText(key, config.getSttModel(), config.getSttLanguage())
@@ -95,6 +99,12 @@ class InboxRuntime(
         scope.cancel()
         resetVoiceBuffers()
         pendingPhoto = null
+        releasePlayer()
+    }
+
+    private fun releasePlayer() {
+        runCatching { mediaPlayer?.release() }
+        mediaPlayer = null
     }
 
     /** Called by the service on link-state changes so a pending photo flushes promptly. */
@@ -130,6 +140,7 @@ class InboxRuntime(
             is InboxNavState.NavAction.ReplyQuoting -> { nav.enterQuick(action.message); render() }
             is InboxNavState.NavAction.React -> { nav.enterReact(action.message); render() }
             is InboxNavState.NavAction.ViewPhoto -> viewPhoto(action.message)
+            is InboxNavState.NavAction.PlayAudio -> playAudio(action.message)
             is InboxNavState.NavAction.Describe -> describe(action.message)
             is InboxNavState.NavAction.SendQuick -> sendText(action.quick.body, nav.quotingMessage())
             is InboxNavState.NavAction.SendReaction -> react(action.message, action.emoji)
@@ -227,26 +238,69 @@ class InboxRuntime(
 
     private fun describe(message: Message) {
         val chat = nav.openChat ?: return
-        if (!ai.isConfigured) { nav.showInfo("Descrever (IA)", listOf("Configure a chave OpenAI no celular.")); render(); return }
+        if (!ai.isConfigured) { nav.showInfo("IA", listOf("Configure a chave OpenAI no celular.")); render(); return }
+        val audio = message.isPlayableAudio
+        val title = if (audio) "Transcricao (IA)" else "Descricao (IA)"
         // Switch to a processing screen right away: gives feedback and, since INFO
         // has no actionable rows, stops repeated taps from firing another request.
-        nav.showInfo("Descricao (IA)", listOf("Processando com IA..."))
+        nav.showInfo(title, listOf(if (audio) "Transcrevendo com IA..." else "Processando com IA..."))
         render()
         scope.launch {
             val svc = serviceFor(chat.boxId)
             val bytes = withContext(Dispatchers.IO) { runCatching { svc?.fetchMedia(chat.id, message) }.getOrNull() }
-            if (bytes == null || bytes.isEmpty()) { nav.showInfo("Descrever (IA)", listOf("Midia indisponivel.")); render(); return@launch }
+            if (bytes == null || bytes.isEmpty()) { nav.showInfo(title, listOf("Midia indisponivel.")); render(); return@launch }
             val lang = java.util.Locale.getDefault().language
             val text = withContext(Dispatchers.IO) {
                 runCatching {
-                    if (message.isImageMedia) ai.describeImage(bytes, lang) else ai.describeFile(bytes, message.fileName, lang)
+                    when {
+                        audio -> stt.transcribeFile(bytes, message.fileName)
+                        message.isImageMedia -> ai.describeImage(bytes, lang)
+                        else -> ai.describeFile(bytes, message.fileName, lang)
+                    }
                 }
             }
-            text.onSuccess { nav.showInfo("Descricao (IA)", listOf(it)) }
-                .onFailure { nav.showInfo("Descrever (IA)", listOf("Falha: ${it.message?.take(180).orEmpty()}")) }
+            text.onSuccess { nav.showInfo(title, listOf(it.ifBlank { "(sem texto)" })) }
+                .onFailure { nav.showInfo(title, listOf("Falha: ${it.message?.take(180).orEmpty()}")) }
             render()
         }
     }
+
+    private fun playAudio(message: Message) {
+        val chat = nav.openChat ?: return
+        nav.showInfo("Audio", listOf("Carregando audio..."))
+        render()
+        scope.launch {
+            val svc = serviceFor(chat.boxId)
+            val bytes = withContext(Dispatchers.IO) { runCatching { svc?.fetchMedia(chat.id, message) }.getOrNull() }
+            if (bytes == null || bytes.isEmpty()) { nav.showInfo("Audio", listOf("Audio indisponivel.")); render(); return@launch }
+            val file = withContext(Dispatchers.IO) {
+                runCatching { java.io.File.createTempFile("voice", ".ogg", appContext.cacheDir).apply { writeBytes(bytes) } }.getOrNull()
+            }
+            val ok = file != null && withContext(Dispatchers.Main) { startPlayback(file) }
+            if (ok) nav.showInfo("Audio", listOf("Reproduzindo no oculos...", "", "Duplo-toque volta (o audio continua)."))
+            else nav.showInfo("Audio", listOf("Nao foi possivel reproduzir este audio."))
+            render()
+        }
+    }
+
+    /** Plays on the phone; the sound reaches the glasses (phone's Bluetooth audio sink). */
+    private fun startPlayback(file: java.io.File): Boolean = runCatching {
+        releasePlayer()
+        mediaPlayer = android.media.MediaPlayer().apply {
+            setAudioAttributes(
+                android.media.AudioAttributes.Builder()
+                    .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build(),
+            )
+            setOnCompletionListener { mp -> runCatching { mp.release() }; if (mediaPlayer === mp) mediaPlayer = null; runCatching { file.delete() } }
+            setOnErrorListener { mp, _, _ -> runCatching { mp.release() }; if (mediaPlayer === mp) mediaPlayer = null; runCatching { file.delete() }; true }
+            setDataSource(file.absolutePath)
+            prepare()
+            start()
+        }
+        true
+    }.getOrDefault(false)
 
     /* ---------------- photo view (image surface) ---------------- */
 

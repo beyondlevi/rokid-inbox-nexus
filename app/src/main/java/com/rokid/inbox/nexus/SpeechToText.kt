@@ -59,6 +59,39 @@ class SpeechToText(
         }
     }
 
+    /**
+     * Transcribe an already-encoded audio clip (a WhatsApp/Telegram voice note is
+     * OGG/Opus; OpenAI's transcriptions endpoint accepts ogg/m4a/mp3/wav/...).
+     * @param fileName carries the extension so the API picks the right decoder.
+     */
+    fun transcribeFile(bytes: ByteArray, fileName: String): String {
+        require(apiKey.isNotBlank()) { "OpenAI key not configured" }
+        require(bytes.isNotEmpty()) { "Audio vazio" }
+        val name = fileName.ifBlank { "audio.ogg" }.let { if (it.contains('.')) it else "$it.ogg" }
+        val body = MultipartBody.Builder()
+            .setType(MultipartBody.FORM)
+            .addFormDataPart("model", model)
+            .addFormDataPart("response_format", "json")
+            .apply { if (language.isNotBlank()) addFormDataPart("language", language) }
+            .addFormDataPart("file", name, bytes.toRequestBody("application/octet-stream".toMediaType()))
+            .build()
+        val request = Request.Builder()
+            .url(TRANSCRIPTIONS_URL)
+            .addHeader("Authorization", "Bearer $apiKey")
+            .addHeader("Accept", "application/json")
+            .post(body)
+            .build()
+        Http.client.newCall(request).execute().use { res ->
+            val text = res.body?.string().orEmpty()
+            if (!res.isSuccessful) {
+                throw RuntimeException("OpenAI STT ${res.code}: ${text.take(300).ifBlank { res.message }}")
+            }
+            val json = Http.parse(text).obj()
+            json.optObj("error")?.let { throw RuntimeException(it.str("message").ifBlank { "OpenAI STT falhou" }) }
+            return json.str("text").trim()
+        }
+    }
+
     private fun com.google.gson.JsonObject?.optObj(key: String): com.google.gson.JsonObject? =
         this?.get(key) as? com.google.gson.JsonObject
 

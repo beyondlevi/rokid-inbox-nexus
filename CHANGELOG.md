@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.2.0] - 2026-08-04 (branch `relay-base`)
+
+### Added
+- Voice/audio messages are now usable again:
+  - **Reproduzir audio** — plays the original voice note on the phone; the sound
+    comes out on the glasses (they are the phone's Bluetooth audio sink — the
+    same route the native Nexus TTS uses). No Nexus endpoint streams raw audio to
+    the glasses; TTS (`tts` capability, text→speech) is the only native audio-out
+    and does not carry arbitrary clips, so phone-side playback is the path.
+  - **Transcrever (IA)** — transcribes the voice note with OpenAI
+    (`/v1/audio/transcriptions`, accepts the OGG/Opus note directly) and shows it
+    in the paged reader. AI description already covered image/file; audio now
+    transcribes.
+
 ## [2.1.1] - 2026-08-04 (branch `relay-base`)
 
 ### Changed
