@@ -26,6 +26,7 @@ class WhatsAppService(
     override val kind = ChannelKind.WHATSAPP
     override val canSend = true
     override val canReact = true
+    override val canSendVoice = true
 
     private val serverUrl = serverUrl.trimEnd('/')
     private val jsonType = "application/json".toMediaType()
@@ -104,6 +105,16 @@ class WhatsAppService(
             quoted(replyToId, replyFromMe, toJid(chatId))?.let { add("quoted", it) }
         }
         post("/message/sendText/$instancePath", body)
+    }
+
+    override suspend fun sendVoice(chatId: String, wav: ByteArray, durationSec: Int, replyToId: String, replyFromMe: Boolean) {
+        val body = JsonObject().apply {
+            addProperty("number", toJid(chatId))
+            addProperty("audio", Base64.encodeToString(wav, Base64.NO_WRAP))
+            addProperty("encoding", true)
+            quoted(replyToId, replyFromMe, toJid(chatId))?.let { add("quoted", it) }
+        }
+        post("/message/sendWhatsAppAudio/$instancePath", body)
     }
 
     override suspend fun sendReaction(chatId: String, messageId: String, emoji: String, fromMe: Boolean) {

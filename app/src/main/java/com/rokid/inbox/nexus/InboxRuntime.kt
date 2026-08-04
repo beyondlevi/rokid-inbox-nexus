@@ -1,8 +1,6 @@
 package com.rokid.inbox.nexus
 
 import android.content.Context
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import com.rokid.inbox.nexus.ai.AiDescriber
 import com.rokid.inbox.nexus.channels.ChannelService
 import com.rokid.inbox.nexus.channels.GitHubService
@@ -15,33 +13,26 @@ import com.rokid.inbox.nexus.model.Chat
 import com.rokid.inbox.nexus.model.Message
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
-import java.util.Locale
 
 /**
- * The phone-side brain of the plugin. Owns the channel services, the OpenAI
- * describer and the config, executes the intents that [InboxNavState] reports,
- * and pushes the resulting surface to the HUD through a [SurfaceHost]. All I/O
- * runs on a scope that is cancelled on close; the plugin is dormant otherwise.
+ * Phone-side brain: owns the channel services, the OpenAI describer/transcriber
+ * and the config; executes the intents [InboxNavState] reports; pushes rich-row
+ * screens to the HUD through a [SurfaceHost]. Voice replies capture the glasses
+ * mic (raw PCM), keep the WAV so the original audio can be sent, and use OpenAI
+ * Whisper to offer a transcribed-text send too.
  */
 class InboxRuntime(
     private val appContext: Context,
     private val host: SurfaceHost,
 ) {
-    /** The service renders NavState screens/images and owns the mic session. */
     interface SurfaceHost {
-        fun renderCard(screen: InboxNavState.Screen)
-        /** @return true if the image was shown; false = image surface unavailable. */
-        fun renderImage(contentKey: String, title: String, caption: String, jpeg: ByteArray, width: Int, height: Int): Boolean
-        /** Whether the glasses image surface (SPP binary plane) is available right now. */
-        fun supportsImage(): Boolean
+        fun render(screen: InboxNavState.Screen)
         fun selfClose()
-        /** Acquire the glasses-mic lease; audio is delivered back via onMic*. */
         fun startMic(): MicStart
         fun stopMic()
     }
@@ -53,64 +44,47 @@ class InboxRuntime(
     private var scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val config = InboxConfigStore(appContext)
     private var services: List<ChannelService> = emptyList()
-    private var ai: AiDescriber = AiDescriber("")
-    private var stt: SpeechToText = SpeechToText("")
+    private var ai = AiDescriber("")
+    private var stt = SpeechToText("")
     private var chatLimit = INITIAL_LIMIT
 
-    // Voice capture buffer (raw 16 kHz mono PCM16 from the glasses mic).
     private val micBuffer = ByteArrayOutputStream()
     private var micSampleRate = 16_000
     private var listening = false
     private var cancelDictation = false
-
-    // Photo pending an image-surface (SPP) window, and the current audio player.
-    private var pendingPhoto: PendingPhoto? = null
-    private var mediaPlayer: android.media.MediaPlayer? = null
-
-    private data class PendingPhoto(
-        val contentKey: String,
-        val jpeg: ByteArray,
-        val width: Int,
-        val height: Int,
-        val caption: String,
-        val fallback: String,
-    )
+    private var lastWav: ByteArray? = null
+    private var lastDurationSec = 0
 
     /* ---------------- lifecycle ---------------- */
 
     fun open() {
-        // Re-entrant open: rebuild everything fresh (the process may be cold).
         scope.cancel()
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-        pendingPhoto = null
-        runCatching { mediaPlayer?.release() }
-        mediaPlayer = null
-        val openAiKey = config.getOpenAiKey()
-        ai = AiDescriber(openAiKey)
-        stt = SpeechToText(openAiKey, config.getSttModel(), config.getSttLanguage())
+        resetVoiceBuffers()
+        val key = config.getOpenAiKey()
+        ai = AiDescriber(key)
+        stt = SpeechToText(key, config.getSttModel(), config.getSttLanguage())
         services = instantiateServices()
         nav.setAiConfigured(ai.isConfigured)
-        nav.setSttEnabled(config.isSttEnabled() && stt.isConfigured)
+        nav.setVoiceEnabled(config.isSttEnabled())
         nav.setQuickMessages(config.getQuickMessages())
         nav.resetToInbox()
         nav.setStatus("Carregando inbox...")
-        host.renderCard(nav.screen())
+        host.render(nav.screen())
         fetchInbox()
     }
 
     fun close() {
         scope.cancel()
-        pendingPhoto = null
-        runCatching { mediaPlayer?.release() }
-        mediaPlayer = null
+        resetVoiceBuffers()
     }
 
-    /* ---------------- input (from the service) ---------------- */
+    /* ---------------- input ---------------- */
 
     fun onNext() { nav.move(1); render() }
     fun onPrev() { nav.move(-1); render() }
+    fun onSelect() = dispatch(nav.activate())
     fun onBack() {
-        // BACK while listening cancels the dictation without transcribing.
         if (nav.view == InboxNavState.View.LISTENING && listening) {
             cancelDictation = true
             host.stopMic()
@@ -118,11 +92,9 @@ class InboxRuntime(
         if (nav.back()) host.selfClose() else render()
     }
 
-    fun onSelect() = dispatch(nav.activate())
+    private fun render() = host.render(nav.screen())
 
-    private fun render() = host.renderCard(nav.screen())
-
-    /* ---------------- action dispatch ---------------- */
+    /* ---------------- dispatch ---------------- */
 
     private fun dispatch(action: InboxNavState.NavAction) {
         when (action) {
@@ -136,129 +108,22 @@ class InboxRuntime(
             InboxNavState.NavAction.ReplyToChat -> { nav.enterQuick(null); render() }
             is InboxNavState.NavAction.ReplyQuoting -> { nav.enterQuick(action.message); render() }
             is InboxNavState.NavAction.React -> { nav.enterReact(action.message); render() }
-            is InboxNavState.NavAction.ViewPhoto -> viewPhoto(action.message)
-            is InboxNavState.NavAction.PlayAudio -> playAudio(action.message)
             is InboxNavState.NavAction.Describe -> describe(action.message)
             is InboxNavState.NavAction.SendQuick -> sendText(action.quick.body, nav.quotingMessage())
             is InboxNavState.NavAction.SendReaction -> react(action.message, action.emoji)
             is InboxNavState.NavAction.Dictate -> startDictation(action.quoting)
-            InboxNavState.NavAction.StopListening -> {
-                nav.setStatus("Transcrevendo...")
-                render()
-                host.stopMic()
-            }
-            InboxNavState.NavAction.SendTranscript -> {
+            InboxNavState.NavAction.StopListening -> { nav.setStatus("Transcrevendo..."); render(); host.stopMic() }
+            InboxNavState.NavAction.SendReplyText -> {
                 val text = nav.currentTranscript.trim()
-                if (text.isBlank()) { nav.showInfo("Voz", listOf("Nada para enviar.")); render() }
+                if (text.isBlank()) { nav.showInfo("Resposta", listOf("Nada para enviar.")); render() }
                 else sendText(text, nav.quotingMessage())
             }
+            InboxNavState.NavAction.SendReplyAudio -> sendAudio(nav.quotingMessage())
             InboxNavState.NavAction.Redictate -> startDictation(nav.quotingMessage())
         }
     }
 
-    /* ---------------- voice dictation (mic -> STT) ---------------- */
-
-    private fun startDictation(quoting: Message?) = beginListen { nav.enterListening(quoting) }
-
-    private fun startVoiceSearch() = beginListen { nav.enterVoiceSearch() }
-
-    private fun beginListen(enter: () -> Unit) {
-        if (!stt.isConfigured) {
-            nav.showInfo("Voz", listOf("Configure a chave OpenAI e ative o STT nos ajustes do celular."))
-            render(); return
-        }
-        micBuffer.reset()
-        cancelDictation = false
-        listening = false
-        enter()
-        nav.setStatus("Solicitando microfone...")
-        render()
-        when (host.startMic()) {
-            MicStart.SENT -> Unit // wait for onMicStarted / onMicStopped
-            MicStart.NOT_GRANTED -> {
-                nav.showInfo("Voz", listOf("Ative o microfone para este plugin em Plugin access (no app Nexus)."))
-                render()
-            }
-            MicStart.NOT_READY -> {
-                nav.showInfo("Voz", listOf("Hub ainda nao conectado. Tente de novo."))
-                render()
-            }
-            MicStart.UNAVAILABLE -> {
-                nav.showInfo("Voz", listOf("Microfone indisponivel."))
-                render()
-            }
-        }
-    }
-
-    /** Mic callbacks, forwarded by the service (serialized on the main thread). */
-    fun onMicStarted(sampleRate: Int) {
-        micSampleRate = if (sampleRate > 0) sampleRate else 16_000
-        micBuffer.reset()
-        listening = true
-        if (nav.view == InboxNavState.View.LISTENING) {
-            nav.setStatus("Ouvindo... toque para parar.")
-            render()
-        }
-    }
-
-    fun onMicFrame(pcm: ByteArray) {
-        if (listening) micBuffer.write(pcm)
-    }
-
-    fun onMicStopped(reason: String) {
-        listening = false
-        val audioBytes = micBuffer.toByteArray()
-        micBuffer.reset()
-        if (cancelDictation) { cancelDictation = false; return }
-        if (reason != "RELEASED") {
-            nav.showInfo("Voz", listOf(micErrorText(reason)))
-            render(); return
-        }
-        transcribeBuffer(audioBytes)
-    }
-
-    private fun transcribeBuffer(audioBytes: ByteArray) {
-        val forSearch = nav.listenPurpose == InboxNavState.ListenPurpose.SEARCH
-        nav.setStatus(if (forSearch) "Buscando..." else "Transcrevendo...")
-        render()
-        scope.launch {
-            val result = withContext(Dispatchers.IO) {
-                runCatching { stt.transcribe(audioBytes, micSampleRate) }
-            }
-            result.onSuccess { text ->
-                when {
-                    text.isBlank() -> { nav.showInfo("Voz", listOf("Nao entendi. Tente de novo.")); render() }
-                    forSearch -> runSearch(text)
-                    else -> { nav.showTranscript(text); render() }
-                }
-            }.onFailure {
-                nav.showInfo("Voz", listOf("Falha na transcricao: ${it.message?.take(160).orEmpty()}"))
-                render()
-            }
-        }
-    }
-
-    /** Search chats by the spoken name across every connected box. */
-    private suspend fun runSearch(query: String) {
-        nav.setStatus("Buscando \"${query.take(40)}\"...")
-        render()
-        val labels = InboxRuntime.computeBoxLabels(services)
-        val matches = withContext(Dispatchers.IO) {
-            runCatching { InboxAggregator.searchChatsByName(services, query, SEARCH_LIMIT) }.getOrDefault(emptyList())
-        }.map { it.copy(boxLabel = labels[it.boxId].orEmpty()) }
-        nav.showSearchResults(query, matches)
-        render()
-    }
-
-    private fun micErrorText(reason: String): String = when (reason) {
-        "REVOKED" -> "Microfone perdido (link caiu ou outro app assumiu)."
-        "DENIED_BUSY" -> "Microfone em uso por outro plugin."
-        "DENIED_NO_LINK" -> "Sem conexao com os oculos."
-        "DENIED_NOT_GRANTED" -> "Ative o microfone para este plugin em Plugin access."
-        else -> "Falha ao capturar audio."
-    }
-
-    /* ---------------- operations ---------------- */
+    /* ---------------- inbox / thread ---------------- */
 
     private fun fetchInbox() {
         nav.setStatus("Carregando inbox...")
@@ -280,27 +145,14 @@ class InboxRuntime(
         render()
         scope.launch {
             val svc = serviceFor(chat.boxId)
-            if (svc == null) {
-                nav.showInfo("Erro", listOf("Canal nao conectado."))
-                render(); return@launch
-            }
-            val result = withContext(Dispatchers.IO) {
-                runCatching { svc.listMessages(chat.id, limit) }
-            }
+            if (svc == null) { nav.showInfo("Erro", listOf("Canal nao conectado.")); render(); return@launch }
+            val result = withContext(Dispatchers.IO) { runCatching { svc.listMessages(chat.id, limit) } }
             result.onSuccess { msgs ->
-                nav.setConversation(
-                    chat = chat,
-                    msgs = msgs,
-                    atStart = msgs.size < limit,
-                    canSend = svc.canSend,
-                    canReact = svc.canReact,
-                )
+                nav.setConversation(chat, msgs, msgs.size < limit, svc.canSend, svc.canReact, svc.canSendVoice)
                 render()
-                if (chat.unreadCount > 0) {
-                    withContext(Dispatchers.IO) { runCatching { svc.markAsRead(chat.id, msgs) } }
-                }
-            }.onFailure { e ->
-                nav.showInfo("Erro", listOf("Falha ao carregar: ${e.message?.take(160).orEmpty()}"))
+                if (chat.unreadCount > 0) withContext(Dispatchers.IO) { runCatching { svc.markAsRead(chat.id, msgs) } }
+            }.onFailure {
+                nav.showInfo("Erro", listOf("Falha ao carregar: ${it.message?.take(160).orEmpty()}"))
                 render()
             }
         }
@@ -312,17 +164,28 @@ class InboxRuntime(
         render()
         scope.launch {
             val svc = serviceFor(chat.boxId)
-            if (svc == null || !svc.canSend) {
-                nav.showInfo("Resposta", listOf("Este canal e somente leitura."))
-                render(); return@launch
-            }
+            if (svc == null || !svc.canSend) { nav.showInfo("Resposta", listOf("Canal somente leitura.")); render(); return@launch }
             val res = withContext(Dispatchers.IO) {
-                runCatching {
-                    svc.sendText(chat.id, text, quoting?.id.orEmpty(), quoting?.isOutgoing ?: false)
-                }
+                runCatching { svc.sendText(chat.id, text, quoting?.id.orEmpty(), quoting?.isOutgoing ?: false) }
             }
-            if (res.isSuccess) nav.showInfo("Resposta", listOf("Mensagem enviada."))
-            else nav.showInfo("Resposta", listOf("Falha ao enviar: ${res.exceptionOrNull()?.message?.take(160).orEmpty()}"))
+            nav.showInfo("Resposta", listOf(if (res.isSuccess) "Mensagem enviada." else "Falha: ${res.exceptionOrNull()?.message?.take(160).orEmpty()}"))
+            render()
+        }
+    }
+
+    private fun sendAudio(quoting: Message?) {
+        val chat = nav.openChat ?: return
+        val wav = lastWav
+        if (wav == null) { nav.showInfo("Resposta", listOf("Nenhum audio gravado.")); render(); return }
+        nav.setStatus("Enviando audio...")
+        render()
+        scope.launch {
+            val svc = serviceFor(chat.boxId)
+            if (svc == null || !svc.canSendVoice) { nav.showInfo("Resposta", listOf("Este canal nao aceita audio.")); render(); return@launch }
+            val res = withContext(Dispatchers.IO) {
+                runCatching { svc.sendVoice(chat.id, wav, lastDurationSec, quoting?.id.orEmpty(), quoting?.isOutgoing ?: false) }
+            }
+            nav.showInfo("Resposta", listOf(if (res.isSuccess) "Audio enviado." else "Falha: ${res.exceptionOrNull()?.message?.take(160).orEmpty()}"))
             render()
         }
     }
@@ -333,149 +196,26 @@ class InboxRuntime(
         render()
         scope.launch {
             val svc = serviceFor(chat.boxId)
-            if (svc == null || !svc.canReact) {
-                nav.showInfo("Reacao", listOf("Reacoes nao suportadas neste canal."))
-                render(); return@launch
-            }
-            val res = withContext(Dispatchers.IO) {
-                runCatching { svc.sendReaction(chat.id, message.id, emoji, message.isOutgoing) }
-            }
-            if (res.isSuccess) nav.showInfo("Reacao", listOf("Reagiu com $emoji."))
-            else nav.showInfo("Reacao", listOf("Falha: ${res.exceptionOrNull()?.message?.take(160).orEmpty()}"))
+            if (svc == null || !svc.canReact) { nav.showInfo("Reacao", listOf("Reacoes nao suportadas.")); render(); return@launch }
+            val res = withContext(Dispatchers.IO) { runCatching { svc.sendReaction(chat.id, message.id, emoji, message.isOutgoing) } }
+            nav.showInfo("Reacao", listOf(if (res.isSuccess) "Reagiu com $emoji." else "Falha: ${res.exceptionOrNull()?.message?.take(160).orEmpty()}"))
             render()
-        }
-    }
-
-    private fun viewPhoto(message: Message) {
-        val chat = nav.openChat ?: return
-        nav.showInfo("Foto", listOf("Carregando foto..."))
-        render()
-        scope.launch {
-            val svc = serviceFor(chat.boxId)
-            val bytes = withContext(Dispatchers.IO) {
-                runCatching { svc?.fetchMedia(chat.id, message) }.getOrNull()
-            }
-            if (bytes == null || bytes.isEmpty()) {
-                nav.showInfo("Foto", listOf("Imagem indisponivel."))
-                render(); return@launch
-            }
-            val img = withContext(Dispatchers.Default) { preprocessImage(bytes) }
-            if (img == null) {
-                nav.showInfo("Foto", listOf("Nao foi possivel decodificar a imagem."))
-                render(); return@launch
-            }
-            val fallback = message.text.ifBlank { message.senderName.ifBlank { "Foto" } }.take(160)
-            pendingPhoto = PendingPhoto(
-                contentKey = "photo-${chat.boxId}-${message.id}",
-                jpeg = img.bytes,
-                width = img.width,
-                height = img.height,
-                caption = message.senderName,
-                fallback = fallback,
-            )
-            // The image surface needs the SPP binary plane (supportsImage). It can be
-            // transiently down; wait for it and retry instead of giving up at once.
-            if (flushPhoto()) return@launch
-            nav.showInfo("Foto", listOf("Carregando foto (aguardando canal de imagem)..."))
-            render()
-            val deadline = android.os.SystemClock.elapsedRealtime() + PHOTO_WAIT_MS
-            while (pendingPhoto != null && android.os.SystemClock.elapsedRealtime() < deadline) {
-                kotlinx.coroutines.delay(700)
-                if (flushPhoto()) return@launch
-            }
-            pendingPhoto?.let {
-                pendingPhoto = null
-                nav.showInfo("Foto", listOf(it.fallback, "", "Canal de imagem inativo — nao consegui exibir a foto. Tente com os oculos conectados e vestidos."))
-                render()
-            }
-        }
-    }
-
-    /** Send the pending photo if the image surface (SPP) is available now. */
-    private fun flushPhoto(): Boolean {
-        val p = pendingPhoto ?: return false
-        if (!host.supportsImage()) return false
-        val shown = host.renderImage(p.contentKey, "Foto", p.caption, p.jpeg, p.width, p.height)
-        if (!shown) return false
-        pendingPhoto = null
-        nav.enterImage() // the image surface is now on screen; do NOT re-render a card over it
-        return true
-    }
-
-    /** Called by the service on link-state changes so a pending photo flushes promptly. */
-    fun onLinkState(@Suppress("UNUSED_PARAMETER") state: Int) {
-        flushPhoto()
-    }
-
-    private fun playAudio(message: Message) {
-        val chat = nav.openChat ?: return
-        nav.showInfo("Audio", listOf("Carregando audio..."))
-        render()
-        scope.launch {
-            val svc = serviceFor(chat.boxId)
-            val bytes = withContext(Dispatchers.IO) {
-                runCatching { svc?.fetchMedia(chat.id, message) }.getOrNull()
-            }
-            if (bytes == null || bytes.isEmpty()) {
-                nav.showInfo("Audio", listOf("Audio indisponivel."))
-                render(); return@launch
-            }
-            val played = withContext(Dispatchers.IO) {
-                runCatching {
-                    val file = java.io.File.createTempFile("play", ".ogg", appContext.cacheDir)
-                    file.writeBytes(bytes)
-                    file
-                }
-            }.mapCatching { file -> withContext(Dispatchers.Main) { startPlayback(file) } }
-            if (played.isSuccess) {
-                nav.showInfo("Audio", listOf("Reproduzindo audio (sai pelo audio dos oculos quando conectados)."))
-            } else {
-                nav.showInfo("Audio", listOf("Falha ao reproduzir: ${played.exceptionOrNull()?.message?.take(160).orEmpty()}"))
-            }
-            render()
-        }
-    }
-
-    private fun startPlayback(file: java.io.File) {
-        runCatching { mediaPlayer?.release() }
-        mediaPlayer = android.media.MediaPlayer().apply {
-            setDataSource(file.absolutePath)
-            setOnCompletionListener { mp ->
-                runCatching { mp.release() }
-                if (mediaPlayer === mp) mediaPlayer = null
-                runCatching { file.delete() }
-            }
-            prepare()
-            start()
         }
     }
 
     private fun describe(message: Message) {
         val chat = nav.openChat ?: return
-        if (!ai.isConfigured) {
-            nav.showInfo("Descrever (IA)", listOf("Configure a chave OpenAI no celular."))
-            render(); return
-        }
+        if (!ai.isConfigured) { nav.showInfo("Descrever (IA)", listOf("Configure a chave OpenAI no celular.")); render(); return }
         nav.setStatus("Descrevendo com IA...")
         render()
         scope.launch {
             val svc = serviceFor(chat.boxId)
-            val bytes = withContext(Dispatchers.IO) {
-                runCatching { svc?.fetchMedia(chat.id, message) }.getOrNull()
-            }
-            if (bytes == null || bytes.isEmpty()) {
-                nav.showInfo("Descrever (IA)", listOf("Midia indisponivel."))
-                render(); return@launch
-            }
-            val lang = Locale.getDefault().language
+            val bytes = withContext(Dispatchers.IO) { runCatching { svc?.fetchMedia(chat.id, message) }.getOrNull() }
+            if (bytes == null || bytes.isEmpty()) { nav.showInfo("Descrever (IA)", listOf("Midia indisponivel.")); render(); return@launch }
+            val lang = java.util.Locale.getDefault().language
             val text = withContext(Dispatchers.IO) {
                 runCatching {
-                    if (message.isImageMedia) {
-                        val jpeg = preprocessImage(bytes, maxDim = 1024, quality = 85)?.bytes ?: bytes
-                        ai.describeImage(jpeg, lang)
-                    } else {
-                        ai.describeFile(bytes, message.fileName, lang)
-                    }
+                    if (message.isImageMedia) ai.describeImage(bytes, lang) else ai.describeFile(bytes, message.fileName, lang)
                 }
             }
             text.onSuccess { nav.showInfo("Descricao (IA)", listOf(it)) }
@@ -484,41 +224,89 @@ class InboxRuntime(
         }
     }
 
-    /* ---------------- image preprocessing ---------------- */
+    /* ---------------- voice ---------------- */
 
-    private data class Img(val bytes: ByteArray, val width: Int, val height: Int)
+    private fun startDictation(quoting: Message?) = beginListen { nav.enterListening(quoting) }
+    private fun startVoiceSearch() = beginListen { nav.enterVoiceSearch() }
 
-    /**
-     * Correct-size a photo for the image surface: decode, downscale so both
-     * edges are <= [maxDim] (image-surface cap is 512 px), JPEG-encode and step
-     * the quality down until it fits under 64 KiB.
-     */
-    private fun preprocessImage(bytes: ByteArray, maxDim: Int = 480, quality: Int = 80): Img? {
-        val src = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return null
-        val scale = minOf(1f, maxDim.toFloat() / maxOf(src.width, src.height))
-        val scaled = if (scale < 1f) {
-            Bitmap.createScaledBitmap(
-                src,
-                (src.width * scale).toInt().coerceAtLeast(1),
-                (src.height * scale).toInt().coerceAtLeast(1),
-                true,
-            )
-        } else {
-            src
+    private fun beginListen(enter: () -> Unit) {
+        resetVoiceBuffers()
+        cancelDictation = false
+        listening = false
+        enter()
+        nav.setStatus("Solicitando microfone...")
+        render()
+        when (host.startMic()) {
+            MicStart.SENT -> Unit
+            MicStart.NOT_GRANTED -> { nav.showInfo("Voz", listOf("Ative o microfone para este plugin em Plugin access.")); render() }
+            MicStart.NOT_READY -> { nav.showInfo("Voz", listOf("Hub nao conectado. Tente de novo.")); render() }
+            MicStart.UNAVAILABLE -> { nav.showInfo("Voz", listOf("Microfone indisponivel.")); render() }
         }
-        var q = quality
-        var out = ByteArrayOutputStream()
-        scaled.compress(Bitmap.CompressFormat.JPEG, q, out)
-        while (out.size() > MAX_IMAGE_BYTES && q > 30) {
-            q -= 10
-            out = ByteArrayOutputStream()
-            scaled.compress(Bitmap.CompressFormat.JPEG, q, out)
-        }
-        if (out.size() > MAX_IMAGE_BYTES) return null
-        return Img(out.toByteArray(), scaled.width, scaled.height)
     }
 
-    /* ---------------- channel wiring ---------------- */
+    fun onMicStarted(sampleRate: Int) {
+        micSampleRate = if (sampleRate > 0) sampleRate else 16_000
+        micBuffer.reset()
+        listening = true
+        if (nav.view == InboxNavState.View.LISTENING) {
+            nav.setStatus(if (nav.listenPurpose == InboxNavState.ListenPurpose.SEARCH) "Ouvindo o nome..." else "Ouvindo... toque para parar.")
+            render()
+        }
+    }
+
+    fun onMicFrame(pcm: ByteArray) { if (listening) micBuffer.write(pcm) }
+
+    fun onMicStopped(reason: String) {
+        listening = false
+        val pcm = micBuffer.toByteArray()
+        micBuffer.reset()
+        if (cancelDictation) { cancelDictation = false; return }
+        if (reason != "RELEASED") { nav.showInfo("Voz", listOf(micErrorText(reason))); render(); return }
+        if (pcm.size < MIN_AUDIO_BYTES) { nav.showInfo("Voz", listOf("Nada capturado.")); render(); return }
+        lastWav = Pcm16Wav.encode(pcm, micSampleRate)
+        lastDurationSec = (pcm.size / (micSampleRate * 2)).coerceAtLeast(1)
+        val search = nav.listenPurpose == InboxNavState.ListenPurpose.SEARCH
+        nav.setStatus(if (search) "Buscando..." else "Transcrevendo...")
+        render()
+        scope.launch {
+            val text = if (stt.isConfigured) {
+                withContext(Dispatchers.IO) { runCatching { stt.transcribe(pcm, micSampleRate) }.getOrDefault("") }
+            } else ""
+            if (search) {
+                if (text.isBlank()) { nav.showInfo("Busca", listOf("Nao entendi. Tente de novo.")); render() }
+                else runSearch(text)
+            } else {
+                // Reply: offer the transcript (if any) and/or the original audio.
+                nav.showReview(transcript = text, hasAudio = true)
+                render()
+            }
+        }
+    }
+
+    private suspend fun runSearch(query: String) {
+        val labels = computeBoxLabels(services)
+        val matches = withContext(Dispatchers.IO) {
+            runCatching { InboxAggregator.searchChatsByName(services, query, SEARCH_LIMIT) }.getOrDefault(emptyList())
+        }.map { it.copy(boxLabel = labels[it.boxId].orEmpty()) }
+        nav.showSearchResults(query, matches)
+        render()
+    }
+
+    private fun resetVoiceBuffers() {
+        micBuffer.reset()
+        lastWav = null
+        lastDurationSec = 0
+    }
+
+    private fun micErrorText(reason: String): String = when (reason) {
+        "REVOKED" -> "Microfone perdido (link caiu ou outro app assumiu)."
+        "DENIED_BUSY" -> "Microfone em uso por outro plugin."
+        "DENIED_NO_LINK" -> "Sem conexao com os oculos."
+        "DENIED_NOT_GRANTED" -> "Ative o microfone em Plugin access."
+        else -> "Falha ao capturar audio."
+    }
+
+    /* ---------------- channels ---------------- */
 
     private fun serviceFor(boxId: String): ChannelService? = services.firstOrNull { it.boxId == boxId }
 
@@ -526,28 +314,10 @@ class InboxRuntime(
         config.getBoxes().mapNotNull { box ->
             runCatching {
                 when (box.kind) {
-                    ChannelKind.WHATSAPP -> WhatsAppService(
-                        boxId = box.id,
-                        serverUrl = box.config["serverUrl"].orEmpty(),
-                        instance = box.config["instance"].orEmpty(),
-                        apiKey = box.config["apiKey"].orEmpty(),
-                    )
-                    ChannelKind.GITHUB -> GitHubService(
-                        boxId = box.id,
-                        token = box.config["token"].orEmpty(),
-                        query = box.config["query"].orEmpty(),
-                    )
-                    ChannelKind.TELEGRAM -> TelegramService(
-                        boxId = box.id,
-                        serverUrl = box.config["serverUrl"].orEmpty(),
-                        apiKey = box.config["apiKey"].orEmpty(),
-                    )
-                    ChannelKind.GMAIL -> GmailService(
-                        boxId = box.id,
-                        clientId = box.config["clientId"].orEmpty(),
-                        clientSecret = box.config["clientSecret"].orEmpty(),
-                        refreshToken = box.config["refreshToken"].orEmpty(),
-                    )
+                    ChannelKind.WHATSAPP -> WhatsAppService(box.id, box.config["serverUrl"].orEmpty(), box.config["instance"].orEmpty(), box.config["apiKey"].orEmpty())
+                    ChannelKind.GITHUB -> GitHubService(box.id, box.config["token"].orEmpty(), box.config["query"].orEmpty())
+                    ChannelKind.TELEGRAM -> TelegramService(box.id, box.config["serverUrl"].orEmpty(), box.config["apiKey"].orEmpty())
+                    ChannelKind.GMAIL -> GmailService(box.id, box.config["clientId"].orEmpty(), box.config["clientSecret"].orEmpty(), box.config["refreshToken"].orEmpty())
                 }
             }.getOrNull()
         }
@@ -556,25 +326,17 @@ class InboxRuntime(
         private const val MAX_CHATS = 40
         private const val INITIAL_LIMIT = 20
         private const val SEARCH_LIMIT = 200
-        private const val MAX_IMAGE_BYTES = 60 * 1024
-        private const val PHOTO_WAIT_MS = 12_000L
+        private const val MIN_AUDIO_BYTES = 3_200
 
         fun glyph(kind: ChannelKind): String = when (kind) {
-            ChannelKind.WHATSAPP -> "W"
-            ChannelKind.TELEGRAM -> "T"
-            ChannelKind.GMAIL -> "E"
-            ChannelKind.GITHUB -> "PR"
+            ChannelKind.WHATSAPP -> "W"; ChannelKind.TELEGRAM -> "T"; ChannelKind.GMAIL -> "E"; ChannelKind.GITHUB -> "PR"
         }
 
-        /** [W] when a type has one box; [W1]/[W2] when several. */
         fun computeBoxLabels(services: List<ChannelService>): Map<String, String> {
-            val byKind = services.groupBy { it.kind }
             val out = HashMap<String, String>()
-            for ((kind, list) in byKind) {
+            services.groupBy { it.kind }.forEach { (kind, list) ->
                 val base = glyph(kind)
-                list.forEachIndexed { i, svc ->
-                    out[svc.boxId] = if (list.size > 1) "[$base${i + 1}]" else "[$base]"
-                }
+                list.forEachIndexed { i, svc -> out[svc.boxId] = if (list.size > 1) "[$base${i + 1}]" else "[$base]" }
             }
             return out
         }

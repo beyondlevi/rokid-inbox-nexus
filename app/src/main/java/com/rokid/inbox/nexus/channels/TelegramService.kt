@@ -24,6 +24,7 @@ class TelegramService(
     override val kind = ChannelKind.TELEGRAM
     override val canSend = true
     override val canReact = true
+    override val canSendVoice = true
 
     private val serverUrl = serverUrl.trimEnd('/')
     private val jsonType = "application/json".toMediaType()
@@ -101,6 +102,15 @@ class TelegramService(
         post("/sendText", JsonObject().apply {
             addProperty("chatId", chatId)
             addProperty("text", text)
+            if (replyToId.isNotBlank()) addProperty("replyToId", replyToId)
+        })
+    }
+
+    override suspend fun sendVoice(chatId: String, wav: ByteArray, durationSec: Int, replyToId: String, replyFromMe: Boolean) {
+        post("/sendVoice", JsonObject().apply {
+            addProperty("chatId", chatId)
+            addProperty("audioBase64", Base64.encodeToString(wav, Base64.NO_WRAP))
+            addProperty("durationSec", durationSec)
             if (replyToId.isNotBlank()) addProperty("replyToId", replyToId)
         })
     }

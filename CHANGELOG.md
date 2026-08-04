@@ -2,6 +2,34 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.0.0] - 2026-07-24 (branch `relay-base`)
+
+Large refactor of the HUD, rebuilt on the shipped Relay plugin's model, keeping
+the Inbox features on top. SDK bumped to `sdk-v0.12.0`.
+
+### Changed
+- **HUD is now rich-row + hub-scrolled.** Rows are `NexusCardLine` with `sub`
+  (smaller preview line), `tone` (NORMAL/DIM/BODY/ALERT) and `selected` — the
+  glasses hub draws the caret and scrolls the card itself ("a HUD that moves").
+  Removed the manual `> ` marker and the manual 6-row pagination entirely.
+- **Relay-style navigation**: a unified inbox LIST (sender title + preview sub +
+  box badge + unread ALERT tone) and a THREAD reader that labels each message
+  with its speaker; message → per-message actions.
+- Reply review now offers **Enviar texto** and **Enviar áudio** (send the
+  transcription or the original voice note) plus **Regravar**.
+
+### Added / kept
+- Multiple boxes (WhatsApp/Telegram/Gmail/GitHub) and full chat-history reading.
+- Voice reply via glasses mic → OpenAI Whisper transcription, with the original
+  audio also sendable on WhatsApp/Telegram (`sendVoice` restored on those
+  channels). Quick replies, emoji reactions, AI describe (image/file), and voice
+  search of contacts across all boxes.
+
+### Removed
+- All notification/push forwarding (this port never had it; the Relay base's
+  notification layer was left out by design).
+- On-HUD photo viewing (image surface) and in-thread audio playback, for now.
+
 ## [1.2.2] - 2026-07-24
 
 ### Fixed
