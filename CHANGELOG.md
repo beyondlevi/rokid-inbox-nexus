@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.4.2] - 2026-08-04
+
+### Fixed
+- **"Atualizar" now shows loading feedback.** Refreshing the inbox set a status
+  line that was appended as the last row of the chat list — off-screen whenever
+  the list is longer than the HUD viewport, so from the top it looked like
+  nothing happened. The refreshing state is now surfaced at the top: the subtitle
+  reads "Atualizando conversas..." and the "Atualizar" row itself becomes
+  "Atualizando...", visible regardless of scroll position.
+
 ## [2.4.1] - 2026-08-04 (branch `relay-base`)
 
 ### Fixed

@@ -97,6 +97,9 @@ class InboxNavState {
     private var infoTitle = ""
     private var infoLines: List<String> = emptyList()
     private var statusLine: String? = null
+    // Transient "refreshing" flag: surfaced at the TOP of the list (subtitle + the
+    // Atualizar row) so it stays visible even when the chat list scrolls off-screen.
+    private var loading = false
 
     var listenPurpose: ListenPurpose = ListenPurpose.REPLY
         private set
@@ -124,9 +127,11 @@ class InboxNavState {
     fun setVoiceEnabled(v: Boolean) { voiceEnabled = v }
     fun setQuickMessages(list: List<QuickMessage>) { quickMessages = list }
     fun setStatus(line: String?) { statusLine = line }
+    fun setLoading(v: Boolean) { loading = v }
 
     fun setInbox(chats: List<Chat>) {
         allChats = chats
+        loading = false
         clampIndex(listIndex, listItemCount()) { listIndex = it }
     }
 
@@ -346,14 +351,16 @@ class InboxNavState {
                 selected = listIndex == idx,
             )
         }
-        if (chats.isEmpty()) rows += Row(text = statusLine ?: "Nenhuma conversa.", tone = Tone.DIM)
+        if (chats.isEmpty()) rows += Row(text = statusLine ?: if (loading) "Atualizando..." else "Nenhuma conversa.", tone = Tone.DIM)
         else statusLine?.let { rows += Row(text = it, tone = Tone.DIM) }
+        val filterLabel = if (filter == Filter.ALL) "Todos" else "Nao lidos"
         return Screen(
             title = "Inbox",
-            subtitle = "${if (filter == Filter.ALL) "Todos" else "Nao lidos"} · ${chats.size}",
+            // Loading shown in the subtitle so it is visible at the top regardless of scroll.
+            subtitle = if (loading) "Atualizando conversas..." else "$filterLabel · ${chats.size}",
             rows = rows,
             footer = if (chats.isEmpty()) "duplo sai" else "${(listIndex - headers.size + 1).coerceAtLeast(1)}/${chats.size} · girar · toque · duplo sai",
-            keySeed = "list|$filter|$listIndex|${chats.size}|${statusLine ?: ""}",
+            keySeed = "list|$filter|$listIndex|${chats.size}|${loading}|${statusLine ?: ""}",
         )
     }
 
@@ -489,7 +496,10 @@ class InboxNavState {
     }
 
     private fun listHeaders(): List<String> {
-        val h = arrayListOf("Filtro: ${if (filter == Filter.ALL) "Todos" else "Nao lidos"}", "Atualizar")
+        val h = arrayListOf(
+            "Filtro: ${if (filter == Filter.ALL) "Todos" else "Nao lidos"}",
+            if (loading) "Atualizando..." else "Atualizar",
+        )
         if (voiceEnabled) h += "Buscar por voz"
         return h
     }

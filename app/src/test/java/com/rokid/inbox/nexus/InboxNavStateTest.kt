@@ -59,6 +59,20 @@ class InboxNavStateTest {
     }
 
     @Test
+    fun `loading is visible at the top of the list, not only as an off-screen row`() {
+        val s = withInbox(chat("a"), chat("b"))
+        s.setLoading(true)
+        val scr = s.screen()
+        assertTrue("subtitle shows refreshing", scr.subtitle!!.contains("Atualizando"))
+        assertTrue("refresh header row reads Atualizando", scr.rows.any { it.text == "Atualizando..." })
+        // Clearing loading (via setInbox) restores the normal header + subtitle.
+        s.setInbox(listOf(chat("a")))
+        val after = s.screen()
+        assertTrue(after.rows.any { it.text == "Atualizar" })
+        assertTrue(after.subtitle!!.contains("·"))
+    }
+
+    @Test
     fun `list rows are rich with exactly one selected and a preview sub`() {
         val s = withInbox(chat("a").copy(lastMessagePreview = "hi there", unreadCount = 2))
         s.move(2) // focus the chat

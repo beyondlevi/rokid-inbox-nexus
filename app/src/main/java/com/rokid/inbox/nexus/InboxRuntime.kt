@@ -101,7 +101,7 @@ class InboxRuntime(
         nav.setVoiceEnabled(config.isSttEnabled())
         nav.setQuickMessages(config.getQuickMessages())
         nav.resetToInbox()
-        nav.setStatus("Carregando inbox...")
+        nav.setLoading(true)
         host.render(nav.screen())
         fetchInbox()
     }
@@ -174,7 +174,8 @@ class InboxRuntime(
     /* ---------------- inbox / thread ---------------- */
 
     private fun fetchInbox() {
-        nav.setStatus("Carregando inbox...")
+        nav.setStatus(null)
+        nav.setLoading(true)
         render()
         scope.launch {
             val labels = computeBoxLabels(services)
