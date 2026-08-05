@@ -13,8 +13,8 @@ android {
         applicationId = "com.rokid.inbox.nexus"
         minSdk = 31
         targetSdk = 36
-        versionCode = 10
-        versionName = "2.0.2"
+        versionCode = 18
+        versionName = "2.4.1"
     }
 
     compileOptions {

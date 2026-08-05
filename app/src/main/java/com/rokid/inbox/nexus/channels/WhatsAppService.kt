@@ -22,6 +22,7 @@ class WhatsAppService(
     serverUrl: String,
     private val instance: String,
     private val apiKey: String,
+    private val contacts: ContactResolver? = null,
 ) : ChannelService {
     override val kind = ChannelKind.WHATSAPP
     override val canSend = true
@@ -63,6 +64,7 @@ class WhatsAppService(
         val names = loadNames()
         val chats = asArray(raw).mapNotNull { mapChat(it, names) }
             .sortedByDescending { epoch(it.lastMessageDate) }
+        contacts?.flush() // persist any @lid -> phone mappings learned from lastMessage.remoteJidAlt
         return chats.take(limit)
     }
 
@@ -91,7 +93,15 @@ class WhatsAppService(
             addProperty("offset", minOf(limit * 2, 400))
         }
         val raw = Http.parse(post("/chat/findMessages/$instancePath", body))
-        return parseMessagesResponse(raw)
+        val records = parseMessagesResponse(raw)
+        // Learn the @lid -> phone mapping from any message key that carries it.
+        val jid = toJid(chatId)
+        if (jid.endsWith("@lid")) {
+            records.firstNotNullOfOrNull { r ->
+                r.optObj("key").str("remoteJidAlt").takeIf { it.endsWith("@s.whatsapp.net") }
+            }?.let { contacts?.noteAlt(jid, it); contacts?.flush() }
+        }
+        return records
             .map { mapMessage(it) }
             .filter { isMeaningful(it) }
             .sortedByDescending { epoch(it.date) }
@@ -201,13 +211,24 @@ class WhatsAppService(
             ?: toIso(c.get("updatedAt"))
         val isUser = type == ChatType.USER
         val lastKey = lastMessage.optObj("key")
+        // The phone JID behind a @lid privacy JID is exposed on the message key as
+        // remoteJidAlt; feed it to the directory so future lookups resolve the lid.
+        val altJid = lastKey.str("remoteJidAlt").ifBlank { lastKey.str("participantAlt") }
+        if (isUser && jid.endsWith("@lid") && altJid.endsWith("@s.whatsapp.net")) {
+            contacts?.noteAlt(jid, altJid)
+        }
+        // Saved address-book name (CardDAV) wins over the contact's self-set pushName.
+        val savedName = if (isUser) contacts?.nameForJid(jid, altJid).orEmpty() else ""
         val contactName = if (isUser) names[jid].orEmpty() else ""
         val lastSenderName = if (isUser && lastKey?.get("fromMe")?.asBooleanOrFalse() != true) {
             lastMessage.str("pushName")
         } else ""
+        // Real phone number behind the JID, if known — turns "Contato 684412" into "+55...".
+        val knownPhone = if (isUser) contacts?.phoneForJid(jid, altJid) else null
         val name = firstNonBlank(
-            c.str("name"), c.str("pushName"), c.str("subject"),
-            contactName, lastSenderName, fallbackName(jid, type),
+            savedName,
+            c.str("name"), c.str("subject"), c.str("pushName"),
+            contactName, lastSenderName, fallbackName(jid, type, knownPhone),
         )
         val lastContent = lastMessage.optObj("message")
         val preview = previewText(chatPreview(lastContent, lastMessage.str("messageType")))
@@ -271,12 +292,13 @@ class WhatsAppService(
 
         fun jidUser(jid: String): String = jid.substringBefore("@").substringBefore(":")
 
-        fun fallbackName(jid: String, type: ChatType): String {
+        fun fallbackName(jid: String, type: ChatType, knownPhone: String? = null): String {
             val user = jidUser(jid)
             return when {
                 type == ChatType.GROUP -> "Grupo ${user.takeLast(6)}"
                 type == ChatType.CHANNEL -> "Canal ${user.takeLast(6)}"
-                jid.endsWith("@lid") -> "Contato ${user.takeLast(6)}"
+                // @lid is an opaque privacy id; show the real +number when we resolved it.
+                jid.endsWith("@lid") -> if (!knownPhone.isNullOrBlank()) "+$knownPhone" else "Contato ${user.takeLast(6)}"
                 else -> "+$user"
             }
         }

@@ -49,6 +49,8 @@ class InboxRuntime(
 
     private var scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val config = InboxConfigStore(appContext)
+    // Local CardDAV-synced address book; resolves saved names for WhatsApp chats.
+    private val contacts = com.rokid.inbox.nexus.contacts.ContactDirectory(appContext)
     private var services: List<ChannelService> = emptyList()
     private var ai = AiDescriber("")
     private var stt = SpeechToText("")
@@ -565,7 +567,7 @@ class InboxRuntime(
         config.getBoxes().mapNotNull { box ->
             runCatching {
                 when (box.kind) {
-                    ChannelKind.WHATSAPP -> WhatsAppService(box.id, box.config["serverUrl"].orEmpty(), box.config["instance"].orEmpty(), box.config["apiKey"].orEmpty())
+                    ChannelKind.WHATSAPP -> WhatsAppService(box.id, box.config["serverUrl"].orEmpty(), box.config["instance"].orEmpty(), box.config["apiKey"].orEmpty(), contacts)
                     ChannelKind.GITHUB -> GitHubService(box.id, box.config["token"].orEmpty(), box.config["query"].orEmpty())
                     ChannelKind.TELEGRAM -> TelegramService(box.id, box.config["serverUrl"].orEmpty(), box.config["apiKey"].orEmpty())
                     ChannelKind.GMAIL -> GmailService(box.id, box.config["clientId"].orEmpty(), box.config["clientSecret"].orEmpty(), box.config["refreshToken"].orEmpty())

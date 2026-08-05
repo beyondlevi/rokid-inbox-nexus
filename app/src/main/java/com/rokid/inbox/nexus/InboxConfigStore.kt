@@ -86,6 +86,42 @@ class InboxConfigStore(context: Context) {
         prefs.edit().putString(KEY_STT_MODEL, model.trim().ifBlank { SpeechToText.DEFAULT_MODEL }).apply()
     }
 
+    /* ---------------- CardDAV contact directory ---------------- */
+
+    fun getCardDavServer(): String = prefs.getString(KEY_DAV_SERVER, "").orEmpty()
+    fun getCardDavUser(): String = prefs.getString(KEY_DAV_USER, "").orEmpty()
+    fun getCardDavPassword(): String = prefs.getString(KEY_DAV_PASS, "").orEmpty()
+
+    fun setCardDavCredentials(server: String, user: String, password: String) {
+        prefs.edit()
+            .putString(KEY_DAV_SERVER, server.trim().trimEnd('/'))
+            .putString(KEY_DAV_USER, user.trim())
+            .putString(KEY_DAV_PASS, password) // keep as typed (passwords may have spaces)
+            .apply()
+    }
+
+    /** True once a server + user + password are all configured. */
+    fun hasCardDav(): Boolean =
+        getCardDavServer().isNotBlank() && getCardDavUser().isNotBlank() && getCardDavPassword().isNotBlank()
+
+    /** Discovered addressbook collection URL (cached after the first sync). */
+    fun getCardDavCollection(): String = prefs.getString(KEY_DAV_COLLECTION, "").orEmpty()
+    fun setCardDavCollection(url: String) { prefs.edit().putString(KEY_DAV_COLLECTION, url).apply() }
+
+    fun getCardDavSyncToken(): String = prefs.getString(KEY_DAV_TOKEN, "").orEmpty()
+    fun setCardDavSyncToken(token: String) { prefs.edit().putString(KEY_DAV_TOKEN, token).apply() }
+
+    fun getCardDavLastSync(): Long = prefs.getLong(KEY_DAV_LAST_SYNC, 0L)
+    fun setCardDavLastSync(epochMs: Long) { prefs.edit().putLong(KEY_DAV_LAST_SYNC, epochMs).apply() }
+
+    /** Wipe CardDAV credentials + cached sync state (collection/token/last-sync). */
+    fun clearCardDav() {
+        prefs.edit()
+            .remove(KEY_DAV_SERVER).remove(KEY_DAV_USER).remove(KEY_DAV_PASS)
+            .remove(KEY_DAV_COLLECTION).remove(KEY_DAV_TOKEN).remove(KEY_DAV_LAST_SYNC)
+            .apply()
+    }
+
     private fun createPrefs(context: Context): SharedPreferences =
         runCatching {
             val masterKeyAlias = MasterKeys.getOrCreate(MasterKeys.AES256_GCM_SPEC)
@@ -109,6 +145,12 @@ class InboxConfigStore(context: Context) {
         private const val KEY_STT_ENABLED = "stt.enabled"
         private const val KEY_STT_LANG = "stt.language"
         private const val KEY_STT_MODEL = "stt.model"
+        private const val KEY_DAV_SERVER = "carddav.server"
+        private const val KEY_DAV_USER = "carddav.user"
+        private const val KEY_DAV_PASS = "carddav.pass"
+        private const val KEY_DAV_COLLECTION = "carddav.collection"
+        private const val KEY_DAV_TOKEN = "carddav.token"
+        private const val KEY_DAV_LAST_SYNC = "carddav.lastSync"
 
         private val DEFAULT_QUICK = listOf(
             QuickMessage("Estou chegando", "Oi! Estou chegando, ja te encontro."),

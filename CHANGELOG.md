@@ -2,6 +2,52 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.4.1] - 2026-08-04 (branch `relay-base`)
+
+### Fixed
+Both found by running the CardDAV client against a real account (Dex/SabreDAV)
+before shipping — they would have made every sync fail on device:
+- **Wrong CardDAV XML namespace.** Requests used `urn:ietf:params:xml:carddav`;
+  the correct namespace is `urn:ietf:params:xml:ns:carddav`. Without the `:ns:`
+  the server returns `404 Not Found` for `addressbook-home-set` /
+  `addressbook-query` / `address-data`, so discovery and sync pulled nothing.
+- **Cloudflare-fronted servers rejected the client.** With no `User-Agent`,
+  Cloudflare (in front of Dex and others) blocks the request with HTTP 403
+  (error 1010). The client now sends a real User-Agent and follows the account
+  root's redirect (e.g. `/` → `/dav`) manually so PROPFIND/REPORT keep their
+  method and body instead of being downgraded to GET.
+
+### Validated
+- Cross-referenced the built index against 505 real WhatsApp DM chats: 300 now
+  show a saved name, and 73 of 149 previously-"Contato NNNNNN" fallbacks resolve
+  to the saved contact (the rest are people with no phone number in the CardDAV
+  account, or `@lid` not yet seen).
+
+## [2.4.0] - 2026-08-04 (branch `relay-base`)
+
+### Added
+- **CardDAV contact directory** — connect your address book (Dex, iCloud, Google,
+  Nextcloud, any CardDAV server) in the plugin settings so WhatsApp chats show the
+  **saved name** instead of "Contato 684412". Configured on the phone (server /
+  user / password) with a **Sincronizar agora** button; nothing leaves the device.
+  - Scales to thousands of contacts: incremental sync via the WebDAV
+    `sync-collection` REPORT (RFC 6578) with a persisted `sync-token`, so after the
+    first pull each refresh transfers only deltas (full `addressbook-query`
+    fallback for servers without sync-collection). Changed cards are fetched in
+    batched `addressbook-multiget` REPORTs.
+  - Matching is by **phone number**, Brazil-aware: resolves the mobile 9th-digit
+    ambiguity (`55DD9XXXXXXXX` ⇄ `55DDXXXXXXXX`) and the presence/absence of the
+    country code, so a saved `+55 81 98662-3552` matches a WhatsApp
+    `558186623552`.
+  - Saved address-book name now takes precedence over the contact's self-set
+    WhatsApp pushName.
+- **`@lid` privacy chats resolved.** WhatsApp `@lid` JIDs carry no phone number,
+  but the real number is exposed on message keys as `remoteJidAlt`. We learn each
+  `@lid → phone` mapping from the chat list and from opened threads, cache it
+  on-device, and cross-reference through the same directory. Even without a
+  CardDAV match, a resolved `@lid` now shows the real `+number` instead of the
+  opaque `Contato NNNNNN`.
+
 ## [2.3.1] - 2026-08-04 (branch `relay-base`)
 
 ### Fixed

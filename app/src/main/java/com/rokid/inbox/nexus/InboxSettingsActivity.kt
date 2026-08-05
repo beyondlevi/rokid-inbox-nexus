@@ -12,6 +12,7 @@ import android.widget.Toast
 import com.anezium.rokidbus.client.ui.BusTheme
 import com.anezium.rokidbus.client.ui.NexusPluginIcons
 import com.anezium.rokidbus.client.ui.NexusUi
+import com.rokid.inbox.nexus.contacts.ContactDirectory
 import com.rokid.inbox.nexus.model.ChannelKind
 import com.rokid.inbox.nexus.model.QuickMessage
 
@@ -67,6 +68,8 @@ class InboxSettingsActivity : Activity() {
         renderOpenAi()
         gap(24)
         renderStt()
+        gap(24)
+        renderCardDav()
         gap(24)
         renderQuickMessages()
         gap(24)
@@ -266,6 +269,106 @@ class InboxSettingsActivity : Activity() {
         }
         card.addView(save, NexusUi.block())
         addView(card)
+    }
+
+    /* ---------------- CardDAV contact directory ---------------- */
+
+    private var davSyncing = false
+
+    private fun renderCardDav() {
+        addView(NexusUi.sectionRow(this, "Agenda de contatos (CardDAV)"))
+        gap(10)
+        val card = NexusUi.card(this)
+        card.addView(
+            NexusUi.cardBody(
+                this,
+                "Conecte sua agenda por CardDAV (Dex, iCloud, Google, Nextcloud...) para mostrar " +
+                    "o nome salvo de cada contato do WhatsApp em vez de \"Contato 000000\". O cruzamento " +
+                    "e por numero de telefone e fica so no celular.",
+            ),
+            NexusUi.block(),
+        )
+        val server = field("Servidor (ex: https://sync.getdex.com)")
+        server.setText(store.getCardDavServer())
+        val user = field("Usuario")
+        user.setText(store.getCardDavUser())
+        val pass = field("Senha")
+        pass.setText(store.getCardDavPassword())
+        listOf(server, user, pass).forEach { card.addView(it, NexusUi.block()) }
+        card.addView(BusTheme.gap(this, 8))
+
+        val save = NexusUi.pillButton(this, "Salvar credenciais", true)
+        save.setOnClickListener {
+            if (server.text.isBlank() || user.text.isBlank() || pass.text.isBlank()) {
+                toast("Preencha servidor, usuario e senha"); return@setOnClickListener
+            }
+            // A credential change invalidates the cached collection/sync-token.
+            store.setCardDavCollection(""); store.setCardDavSyncToken("")
+            store.setCardDavCredentials(server.text.toString(), user.text.toString(), pass.text.toString())
+            toast("Credenciais salvas")
+        }
+        card.addView(save, NexusUi.block())
+        card.addView(BusTheme.gap(this, 8))
+
+        val syncBtn = NexusUi.pillButton(this, if (davSyncing) "Sincronizando..." else "Sincronizar agora", false)
+        syncBtn.isEnabled = !davSyncing
+        syncBtn.setOnClickListener {
+            if (davSyncing) return@setOnClickListener
+            if (server.text.isBlank() || user.text.isBlank() || pass.text.isBlank()) {
+                toast("Preencha e salve as credenciais primeiro"); return@setOnClickListener
+            }
+            store.setCardDavCredentials(server.text.toString(), user.text.toString(), pass.text.toString())
+            startCardDavSync()
+        }
+        card.addView(syncBtn, NexusUi.block())
+
+        card.addView(BusTheme.gap(this, 8))
+        card.addView(NexusUi.rowSub(this, cardDavStatus()), NexusUi.block())
+
+        if (store.hasCardDav()) {
+            card.addView(BusTheme.gap(this, 8))
+            val clear = NexusUi.textButton(this, "Desconectar agenda", true)
+            clear.setOnClickListener {
+                ContactDirectory(this).clearDirectory()
+                store.clearCardDav()
+                toast("Agenda desconectada")
+                content.post { render() }
+            }
+            card.addView(clear, NexusUi.block())
+        }
+        addView(card)
+    }
+
+    private fun startCardDavSync() {
+        davSyncing = true
+        content.post { render() }
+        Thread {
+            val result = runCatching {
+                ContactDirectory(this).sync(
+                    store.getCardDavServer(), store.getCardDavUser(), store.getCardDavPassword(),
+                )
+            }
+            runOnUiThread {
+                davSyncing = false
+                result
+                    .onSuccess { toast(it.message) }
+                    .onFailure { toast("Falha ao sincronizar: ${it.message?.take(140)}") }
+                render()
+            }
+        }.start()
+    }
+
+    private fun cardDavStatus(): String {
+        if (!store.hasCardDav()) return "Nao configurado."
+        val last = store.getCardDavLastSync()
+        return if (last <= 0) {
+            "Credenciais salvas. Toque em Sincronizar agora."
+        } else {
+            val when_ = java.text.SimpleDateFormat("dd/MM HH:mm", java.util.Locale.getDefault())
+                .format(java.util.Date(last))
+            val count = ContactDirectory(this).contactCount
+            "Ultima sincronizacao: $when_ · $count contatos"
+        }
     }
 
     /* ---------------- quick replies ---------------- */
