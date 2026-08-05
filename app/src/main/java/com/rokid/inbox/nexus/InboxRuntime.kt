@@ -584,15 +584,23 @@ class InboxRuntime(
         private const val MAX_IMAGE_BYTES = 60 * 1024
         private const val PHOTO_WAIT_MS = 12_000L
 
+        /**
+         * Per-channel pseudo-icon shown as the card badge. The HUD card surface
+         * carries only text (no per-row bitmap in SDK v0.12.0), so we use the
+         * closest recognizable emoji: WhatsApp speech balloon, Telegram paper
+         * plane, Gmail envelope, GitHub octopus (octocat). Whether the glasses
+         * font renders these in color is a device-side detail.
+         */
         fun glyph(kind: ChannelKind): String = when (kind) {
-            ChannelKind.WHATSAPP -> "W"; ChannelKind.TELEGRAM -> "T"; ChannelKind.GMAIL -> "E"; ChannelKind.GITHUB -> "PR"
+            ChannelKind.WHATSAPP -> "💬"; ChannelKind.TELEGRAM -> "✈️"; ChannelKind.GMAIL -> "📧"; ChannelKind.GITHUB -> "🐙"
         }
 
         fun computeBoxLabels(services: List<ChannelService>): Map<String, String> {
             val out = HashMap<String, String>()
             services.groupBy { it.kind }.forEach { (kind, list) ->
                 val base = glyph(kind)
-                list.forEachIndexed { i, svc -> out[svc.boxId] = if (list.size > 1) "[$base${i + 1}]" else "[$base]" }
+                // Append an index only when several boxes share a channel (e.g. two WhatsApp accounts).
+                list.forEachIndexed { i, svc -> out[svc.boxId] = if (list.size > 1) "$base${i + 1}" else base }
             }
             return out
         }

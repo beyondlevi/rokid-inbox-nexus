@@ -2,6 +2,21 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.5.0] - 2026-08-05
+
+### Added
+- **Filter now cycles through each channel.** The "Filtro" row no longer just
+  toggles Todos/Nao lidos — it cycles Todos → Nao lidos → each connected channel
+  (WhatsApp, Telegram, Gmail, GitHub, in that order) → back to Todos, showing only
+  that channel's chats. Only channels that actually have chats appear in the
+  cycle; if a filtered channel disappears on refresh, it falls back to Todos.
+- **Per-chat channel indicator (pseudo-icon).** Each conversation card carries an
+  emoji badge for its origin channel — WhatsApp 💬, Telegram ✈️, Gmail 📧,
+  GitHub 🐙 — also shown in the thread header. The Nexus HUD card surface only
+  transports text per row (no per-row bitmap in SDK v0.12.0), so a real brand PNG
+  cannot be placed on a card; the emoji is the closest supported indicator. Color
+  rendering depends on the glasses font.
+
 ## [2.4.2] - 2026-08-04
 
 ### Fixed

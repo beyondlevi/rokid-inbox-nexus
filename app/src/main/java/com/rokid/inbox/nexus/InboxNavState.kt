@@ -1,5 +1,6 @@
 package com.rokid.inbox.nexus
 
+import com.rokid.inbox.nexus.model.ChannelKind
 import com.rokid.inbox.nexus.model.Chat
 import com.rokid.inbox.nexus.model.Message
 import com.rokid.inbox.nexus.model.QuickMessage
@@ -17,7 +18,12 @@ import com.rokid.inbox.nexus.model.QuickMessage
 class InboxNavState {
 
     enum class View { LIST, THREAD, MSG_ACTIONS, QUICK, REACT, LISTENING, REVIEW, SEARCH_RESULTS, INFO, IMAGE, PHOTO_PREVIEW }
-    enum class Filter { ALL, UNREAD }
+    /** Inbox filter: everything, unread-only, or a single channel. */
+    sealed class Filter {
+        data object All : Filter()
+        data object Unread : Filter()
+        data class Channel(val kind: ChannelKind) : Filter()
+    }
     enum class Tone { NORMAL, DIM, BODY, ALERT }
     enum class ListenPurpose { REPLY, SEARCH }
 
@@ -72,7 +78,7 @@ class InboxNavState {
 
     // Data
     private var allChats: List<Chat> = emptyList()
-    var filter: Filter = Filter.ALL
+    var filter: Filter = Filter.All
         private set
     var openChat: Chat? = null
         private set
@@ -132,6 +138,9 @@ class InboxNavState {
     fun setInbox(chats: List<Chat>) {
         allChats = chats
         loading = false
+        // If a channel filter is active but that channel no longer has chats, fall back to All.
+        val f = filter
+        if (f is Filter.Channel && f.kind !in availableChannels()) filter = Filter.All
         clampIndex(listIndex, listItemCount()) { listIndex = it }
     }
 
@@ -308,8 +317,26 @@ class InboxNavState {
     }
 
     fun cycleFilter() {
-        filter = if (filter == Filter.ALL) Filter.UNREAD else Filter.ALL
+        val cycle = filterCycle()
+        val i = cycle.indexOf(filter).let { if (it < 0) 0 else it }
+        filter = cycle[(i + 1) % cycle.size]
         clampIndex(listIndex, listItemCount()) { listIndex = it }
+    }
+
+    /** Channel kinds that currently have chats, in a stable display order. */
+    private fun availableChannels(): List<ChannelKind> {
+        val present = allChats.map { it.channel }.toSet()
+        return CHANNEL_ORDER.filter { it in present }
+    }
+
+    /** Filter cycle: All -> Unread -> each connected channel -> back to All. */
+    private fun filterCycle(): List<Filter> =
+        listOf(Filter.All, Filter.Unread) + availableChannels().map { Filter.Channel(it) }
+
+    private fun filterLabel(): String = when (val f = filter) {
+        Filter.All -> "Todos"
+        Filter.Unread -> "Nao lidos"
+        is Filter.Channel -> channelName(f.kind)
     }
 
     /* ---------------- rendering ---------------- */
@@ -353,11 +380,10 @@ class InboxNavState {
         }
         if (chats.isEmpty()) rows += Row(text = statusLine ?: if (loading) "Atualizando..." else "Nenhuma conversa.", tone = Tone.DIM)
         else statusLine?.let { rows += Row(text = it, tone = Tone.DIM) }
-        val filterLabel = if (filter == Filter.ALL) "Todos" else "Nao lidos"
         return Screen(
             title = "Inbox",
             // Loading shown in the subtitle so it is visible at the top regardless of scroll.
-            subtitle = if (loading) "Atualizando conversas..." else "$filterLabel · ${chats.size}",
+            subtitle = if (loading) "Atualizando conversas..." else "${filterLabel()} · ${chats.size}",
             rows = rows,
             footer = if (chats.isEmpty()) "duplo sai" else "${(listIndex - headers.size + 1).coerceAtLeast(1)}/${chats.size} · girar · toque · duplo sai",
             keySeed = "list|$filter|$listIndex|${chats.size}|${loading}|${statusLine ?: ""}",
@@ -490,14 +516,15 @@ class InboxNavState {
 
     /* ---------------- rows / helpers ---------------- */
 
-    private fun visibleChats(): List<Chat> = when (filter) {
-        Filter.ALL -> allChats
-        Filter.UNREAD -> allChats.filter { it.unreadCount > 0 }
+    private fun visibleChats(): List<Chat> = when (val f = filter) {
+        Filter.All -> allChats
+        Filter.Unread -> allChats.filter { it.unreadCount > 0 }
+        is Filter.Channel -> allChats.filter { it.channel == f.kind }
     }
 
     private fun listHeaders(): List<String> {
         val h = arrayListOf(
-            "Filtro: ${if (filter == Filter.ALL) "Todos" else "Nao lidos"}",
+            "Filtro: ${filterLabel()}",
             if (loading) "Atualizando..." else "Atualizar",
         )
         if (voiceEnabled) h += "Buscar por voz"
@@ -632,6 +659,16 @@ class InboxNavState {
     }
 
     companion object {
+        /** Stable order used both for the filter cycle and any per-kind display. */
+        private val CHANNEL_ORDER = listOf(
+            ChannelKind.WHATSAPP, ChannelKind.TELEGRAM, ChannelKind.GMAIL, ChannelKind.GITHUB,
+        )
+        fun channelName(kind: ChannelKind): String = when (kind) {
+            ChannelKind.WHATSAPP -> "WhatsApp"
+            ChannelKind.TELEGRAM -> "Telegram"
+            ChannelKind.GMAIL -> "Gmail"
+            ChannelKind.GITHUB -> "GitHub"
+        }
         private const val THREAD_CHUNK_CHARS = 52
         // Dense reader for the AI description: wrap narrow (<= plain-body width
         // ~27 cols) and pack a page under the body's ~15-line cap.

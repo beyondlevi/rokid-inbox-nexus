@@ -52,10 +52,27 @@ class InboxNavStateTest {
     fun `filter toggle hides read chats`() {
         val s = withInbox(chat("a", unread = 0), chat("b", unread = 3))
         s.cycleFilter()
-        assertEquals(InboxNavState.Filter.UNREAD, s.filter)
+        assertEquals(InboxNavState.Filter.Unread, s.filter)
         s.move(2) // 2 headers + only chat "b"
         val open = s.activate()
         assertEquals("b", (open as InboxNavState.NavAction.OpenChat).chat.id)
+    }
+
+    @Test
+    fun `filter cycles through each connected channel then back to All`() {
+        val wa = chat("a").copy(channel = com.rokid.inbox.nexus.model.ChannelKind.WHATSAPP)
+        val tg = chat("b").copy(channel = com.rokid.inbox.nexus.model.ChannelKind.TELEGRAM)
+        val s = withInbox(wa, tg)
+        assertEquals(InboxNavState.Filter.All, s.filter)
+        s.cycleFilter(); assertEquals(InboxNavState.Filter.Unread, s.filter)
+        // Then one step per connected channel, in canonical order (WhatsApp before Telegram).
+        s.cycleFilter(); assertEquals(InboxNavState.Filter.Channel(com.rokid.inbox.nexus.model.ChannelKind.WHATSAPP), s.filter)
+        s.cycleFilter(); assertEquals(InboxNavState.Filter.Channel(com.rokid.inbox.nexus.model.ChannelKind.TELEGRAM), s.filter)
+        s.cycleFilter(); assertEquals(InboxNavState.Filter.All, s.filter) // wraps
+        // Channel filter shows only that channel's chats.
+        s.cycleFilter(); s.cycleFilter() // -> WhatsApp
+        assertEquals(1, s.screen().rows.count { it.text == "Chat a" })
+        assertEquals(0, s.screen().rows.count { it.text == "Chat b" })
     }
 
     @Test
