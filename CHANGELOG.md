@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.5.1] - 2026-08-05
+
+### Fixed
+- **Channel emoji now shows in the conversation list and search.** It was placed
+  in the row `badge` field, which the hub renders on thread message rows but not
+  on list/search rows — so the icon only appeared once you opened a conversation
+  (where it rides the title text). Moved the channel emoji into the row text
+  (prefixing the chat name), the same place the thread title uses, so it shows
+  everywhere.
+
 ## [2.5.0] - 2026-08-05
 
 ### Added

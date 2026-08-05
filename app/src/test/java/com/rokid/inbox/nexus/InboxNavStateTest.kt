@@ -71,8 +71,8 @@ class InboxNavStateTest {
         s.cycleFilter(); assertEquals(InboxNavState.Filter.All, s.filter) // wraps
         // Channel filter shows only that channel's chats.
         s.cycleFilter(); s.cycleFilter() // -> WhatsApp
-        assertEquals(1, s.screen().rows.count { it.text == "Chat a" })
-        assertEquals(0, s.screen().rows.count { it.text == "Chat b" })
+        assertEquals(1, s.screen().rows.count { it.text.contains("Chat a") })
+        assertEquals(0, s.screen().rows.count { it.text.contains("Chat b") })
     }
 
     @Test
@@ -97,7 +97,9 @@ class InboxNavStateTest {
         assertEquals(1, rows.count { it.selected })
         val chatRow = rows.first { it.selected }
         assertEquals("hi there", chatRow.sub)
-        assertEquals("[W]", chatRow.badge)
+        // Channel pseudo-icon lives in the row text now (the hub doesn't render the
+        // badge glyph on list rows), so it prefixes the chat name.
+        assertTrue(chatRow.text.startsWith("[W]"))
         assertEquals(InboxNavState.Tone.ALERT, chatRow.tone) // unread
     }
 

@@ -371,9 +371,8 @@ class InboxNavState {
         chats.forEachIndexed { i, c ->
             val idx = i + headers.size
             rows += Row(
-                text = chatTitle(c),
+                text = titleWithChannel(c),
                 sub = c.lastMessagePreview.replace("\n", " ").trim().ifBlank { null },
-                badge = c.boxLabel.ifBlank { null },
                 tone = if (c.unreadCount > 0) Tone.ALERT else Tone.NORMAL,
                 selected = listIndex == idx,
             )
@@ -496,7 +495,7 @@ class InboxNavState {
 
     private fun searchScreen(): Screen {
         val rows = searchResults.mapIndexed { i, c ->
-            Row(text = chatTitle(c), sub = c.lastMessagePreview.replace("\n", " ").trim().ifBlank { null }, badge = c.boxLabel.ifBlank { null }, selected = searchIndex == i)
+            Row(text = titleWithChannel(c), sub = c.lastMessagePreview.replace("\n", " ").trim().ifBlank { null }, selected = searchIndex == i)
         }.ifEmpty { listOf(Row(text = "Nada encontrado.", tone = Tone.DIM)) }
         return Screen("Busca: ${searchQuery.take(40)}", "${searchResults.size}", rows, "girar · toque abre · duplo volta", "search|$searchQuery|$searchIndex|${searchResults.size}")
     }
@@ -603,6 +602,16 @@ class InboxNavState {
     }
 
     private fun chatTitle(c: Chat): String = c.name.ifBlank { "?" }.take(120)
+
+    /**
+     * Chat title prefixed with the channel pseudo-icon. The emoji goes in the row
+     * TEXT (not the badge field): the hub renders emoji in text — as proven by the
+     * thread title — but does not surface the badge glyph on list/search rows.
+     */
+    private fun titleWithChannel(c: Chat): String {
+        val g = c.boxLabel.trim()
+        return if (g.isEmpty()) chatTitle(c) else "$g ${chatTitle(c)}".take(120)
+    }
 
     // The sender is carried by the row badge ("Eu" / name), so the text is just
     // the message body — prefixing "Eu:" here duplicated the speaker column.
